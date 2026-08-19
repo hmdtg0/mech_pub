@@ -125,43 +125,27 @@ else:
 
 pg = st.navigation(pages)
 
-# Show user info in sidebar (same block as the PCB tool, plus which project
-# the session is reading — projects are chosen on Submit Order / Parts).
+# Streamlit 1.38 folds the nav behind a "View more" once the page count
+# passes its threshold — with three roles' worth of pages that hid half the
+# app and buried the project switcher under it (Hamid, 19 Aug). The
+# `expanded=` switch that fixes this properly arrived in a later Streamlit,
+# so on 1.38 the collapse is undone directly: the nav list is clipped with a
+# max-height and the button toggles it. Safe to pin CSS to internals ONLY
+# because requirements pins streamlit==1.38.0 — revisit this when that pin
+# moves.
+st.markdown("""<style>
+[data-testid="stSidebarNav"] ul { max-height: none !important; }
+[data-testid="stSidebarNavViewButton"] { display: none !important; }
+</style>""", unsafe_allow_html=True)
+
+# The custom sidebar block. Streamlit pins its navigation above ANY custom
+# sidebar content, so the picker cannot sit between nav groups — first place
+# it can be is directly under the nav, which is where it is. Order is by how
+# often a thing is needed: the project switch is a working control, identity
+# is something you check once a day, so the picker comes first and who-am-I
+# moves to the bottom.
 with st.sidebar:
-    st.markdown("---")
-    role_badge = "🔑 Admin" if is_admin(user) else "📦 Logistics" if is_logistics(user) else "👤 Engineer"
-    st.markdown(f"{role_badge} **{user['name']}**")
-    st.caption(user["email"])
-    # Logout has to tell the truth about WHERE the identity lives, because it
-    # is different in each mode — and the old unconditional
-    # `del st.session_state["auth_email"]` crashed the whole app the moment
-    # that key did not exist (it was only ever set by the name picker).
     from config import IS_LOCAL
-
-    if IS_LOCAL:
-        # Local dev signs the configured admin in on every run; deleting the
-        # session just signs them straight back in. A button that pretends
-        # otherwise is worse than none. Real sign-in/out is exercised on the
-        # deployed-mode server (port 8503).
-        st.caption("Local development — signed in automatically. Logout "
-                   "exists on the deployed app, where sign-in is real.")
-    elif "auth_email" in st.session_state:
-        # Name login (the break-glass): the identity lives in this session,
-        # so ending the session genuinely logs out.
-        if st.button("Logout", type="secondary", use_container_width=True):
-            st.session_state.pop("auth_email", None)
-            st.session_state.pop("user", None)
-            st.rerun()
-    else:
-        # Verified sign-in: the identity arrives with every request from
-        # Streamlit / Cloudflare. The app cannot end that session — only the
-        # provider can — so say where, rather than offering a logout that
-        # would quietly not work.
-        st.caption("Signed in through your Google account. To switch person, "
-                   "sign out there — the app follows whatever the sign-in "
-                   "in front of it says.")
-
-    st.markdown("---")
     from utils import parts_tracker, project_colors
     from utils.google_client import credentials_status
 
@@ -194,5 +178,36 @@ with st.sidebar:
     _cred_err = credentials_status()
     if _cred_err:
         st.caption(f"⚠️ Read-only — no Google credentials ({_cred_err})")
+
+    st.markdown("---")
+    role_badge = "🔑 Admin" if is_admin(user) else "📦 Logistics" if is_logistics(user) else "👤 Engineer"
+    st.markdown(f"{role_badge} **{user['name']}**")
+    st.caption(user["email"])
+    # Logout has to tell the truth about WHERE the identity lives, because it
+    # is different in each mode — and the old unconditional
+    # `del st.session_state["auth_email"]` crashed the whole app the moment
+    # that key did not exist (it was only ever set by the name picker).
+    if IS_LOCAL:
+        # Local dev signs the configured admin in on every run; deleting the
+        # session just signs them straight back in. A button that pretends
+        # otherwise is worse than none. Real sign-in/out is exercised on the
+        # deployed-mode server (port 8503).
+        st.caption("Local development — signed in automatically. Logout "
+                   "exists on the deployed app, where sign-in is real.")
+    elif "auth_email" in st.session_state:
+        # Name login (the break-glass): the identity lives in this session,
+        # so ending the session genuinely logs out.
+        if st.button("Logout", type="secondary", use_container_width=True):
+            st.session_state.pop("auth_email", None)
+            st.session_state.pop("user", None)
+            st.rerun()
+    else:
+        # Verified sign-in: the identity arrives with every request from
+        # Streamlit / Cloudflare. The app cannot end that session — only the
+        # provider can — so say where, rather than offering a logout that
+        # would quietly not work.
+        st.caption("Signed in through your Google account. To switch person, "
+                   "sign out there — the app follows whatever the sign-in "
+                   "in front of it says.")
 
 pg.run()
