@@ -1,4 +1,22 @@
-"""Google API client using Service Account for headless (Cloud) deployment."""
+"""Google API client — the identity the app talks to Google as.
+
+Two credential species are supported, and WHICH one matters for quota, not
+just access. Google meters API calls per GCP *project*, and the credential
+decides whose project pays:
+
+- **Authorized-user token** (`data/google_token.json`, minted once by
+  `tools/authorize_company.py` from the company's OAuth client). Calls bill
+  to the COMPANY's project, so this app cannot starve the other tools that
+  share the development project's quota (Hamid, 19 Aug 2026). Preferred when
+  present.
+- **Service account** (`service_account.json`) — the original robot, whose
+  calls bill to the development project. Still the fallback, so nothing
+  breaks while the token doesn't exist yet.
+
+Who did what in the app is NOT this file's business: every ledger write is
+stamped with the signed-in user's email regardless of which credential the
+robot uses.
+"""
 from __future__ import annotations
 
 import json
@@ -7,6 +25,7 @@ import threading
 from typing import Callable, Optional
 
 import gspread
+from google.oauth2.credentials import Credentials as UserCredentials
 from google.oauth2.service_account import Credentials
 
 from config import GOOGLE_SHEET_ID, SERVICE_ACCOUNT_FILE, IS_LOCAL
@@ -15,6 +34,12 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+
+# The authorized-user token, if the one-time consent has been run. Lives under
+# data/ so it can never be committed — the whole folder is gitignored.
+_APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OAUTH_TOKEN_FILE = os.environ.get(
+    "MECH_OAUTH_TOKEN_FILE", os.path.join(_APP_DIR, "data", "google_token.json"))
 
 _gspread_client: Optional[gspread.Client] = None
 _drive_service = None
@@ -42,7 +67,7 @@ def active_sheet_id() -> str:
 
 # Resolved once per process. Every store asks for credentials several times per
 # rerun, so a failure must be remembered — not re-reported on each call.
-_creds: Optional[Credentials] = None
+_creds = None  # either species; both satisfy gspread and googleapiclient
 _creds_checked = False
 CREDENTIALS_ERROR = ""
 
@@ -58,31 +83,79 @@ def _secrets_file_exists() -> bool:
     return any(os.path.exists(p) for p in candidates)
 
 
-def _load_credentials() -> Optional[Credentials]:
-    """Load service account credentials from file or Streamlit secrets.
+def _user_creds_from(info: dict, where: str):
+    """Authorized-user credentials from a token dict, or (None, reason).
 
-    Returns None when neither is present; the reason is left in
-    CREDENTIALS_ERROR for the app to surface once (see credentials_status()).
+    The one mistake worth a precise message: pointing this at the OAuth
+    CLIENT file. That file is the key-maker, not a key — it has no
+    refresh_token and never will. Saying "malformed" sent us down a wrong
+    road once already.
+    """
+    if "installed" in info or "web" in info:
+        return None, ("%s is an OAuth CLIENT file, not a token. Run "
+                      "tools/authorize_company.py once to mint the token."
+                      % where)
+    if not info.get("refresh_token"):
+        return None, ("%s has no refresh_token, so it cannot outlive one "
+                      "session. Re-run tools/authorize_company.py." % where)
+    try:
+        return UserCredentials.from_authorized_user_info(info, SCOPES), ""
+    except Exception as e:
+        return None, "%s: %s" % (where, str(e).split("\n")[0])
+
+
+def _load_credentials():
+    """The identity to call Google as, resolved once per process.
+
+    Order: the company token (bills the company's quota), then the service
+    account file (bills the development project), then Streamlit secrets —
+    same two species, same order. Returns None when nothing is present; the
+    reason is left in CREDENTIALS_ERROR for the app to surface once.
     """
     global _creds, _creds_checked, CREDENTIALS_ERROR
     if _creds_checked:
         return _creds
     _creds_checked = True
 
-    # Try local file first
+    if os.path.exists(OAUTH_TOKEN_FILE):
+        try:
+            info = json.load(open(OAUTH_TOKEN_FILE, encoding="utf-8"))
+        except Exception as e:
+            CREDENTIALS_ERROR = "Could not read %s: %s" % (OAUTH_TOKEN_FILE, e)
+            return None
+        creds, why = _user_creds_from(info, OAUTH_TOKEN_FILE)
+        if creds is None:
+            # A broken token is a configuration error to fix, not something to
+            # silently paper over with the other credential — that would move
+            # the quota back without anyone noticing.
+            CREDENTIALS_ERROR = why
+            return None
+        _creds = creds
+        return _creds
+
+    # The original robot — still what local dev uses until the token exists.
     if os.path.exists(SERVICE_ACCOUNT_FILE):
         _creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
         return _creds
 
-    # Try Streamlit secrets (for Cloud deployment). Guarded by the file check:
+    # Streamlit secrets (Cloud deployment). Guarded by the file check:
     # touching st.secrets with no secrets.toml present makes Streamlit paint a
     # red "No secrets found" box before it raises, which try/except can't undo.
     if not _secrets_file_exists():
-        CREDENTIALS_ERROR = "No service_account.json and no secrets.toml."
+        CREDENTIALS_ERROR = ("No google_token.json, no service_account.json "
+                             "and no secrets.toml.")
         return None
 
     try:
         import streamlit as st
+        if "google_oauth_token" in st.secrets:
+            creds, why = _user_creds_from(dict(st.secrets["google_oauth_token"]),
+                                          "[google_oauth_token] in secrets")
+            if creds is not None:
+                _creds = creds
+                return _creds
+            CREDENTIALS_ERROR = why
+            return None
         if "gcp_service_account" in st.secrets:
             sa_info = st.secrets["gcp_service_account"]
             # Convert AttrDict to regular dict and ensure proper types
@@ -92,7 +165,8 @@ def _load_credentials() -> Optional[Credentials]:
                 sa_dict["private_key"] = sa_dict["private_key"].replace("\\n", "\n")
             _creds = Credentials.from_service_account_info(sa_dict, scopes=SCOPES)
             return _creds
-        CREDENTIALS_ERROR = "No [gcp_service_account] entry in Streamlit secrets."
+        CREDENTIALS_ERROR = ("No [google_oauth_token] or [gcp_service_account] "
+                             "entry in Streamlit secrets.")
     except Exception as e:
         CREDENTIALS_ERROR = str(e).split("\n")[0]
 
@@ -107,7 +181,7 @@ def credentials_status() -> str:
 
 
 def get_gspread_client() -> Optional[gspread.Client]:
-    """Get authenticated gspread client using Service Account."""
+    """Get an authenticated gspread client (either credential species)."""
     global _gspread_client
     if _gspread_client is not None:
         return _gspread_client
