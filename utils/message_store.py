@@ -62,6 +62,14 @@ def fetch_unread_messages(user_name: str) -> list[dict]:
 
 
 def send_message(client: gspread.Client, order_id: str, author: str, content: str):
+    from utils.auth import impersonation_block
+    blocked = impersonation_block()
+    if blocked:
+        # A clean stop, not an exception: the cloud redacts tracebacks into
+        # noise, and "why can't I save" deserves a sentence, not a stack.
+        import streamlit as st
+        st.error(blocked)
+        st.stop()
     msg_id = str(uuid.uuid4())[:8]
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     # append_row appends after the last data row in one API round trip

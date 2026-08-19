@@ -196,6 +196,14 @@ def _order_row(order_data: dict) -> tuple:
 
 def create_order(client: gspread.Client, order_data: dict) -> str:
     """Create a new order in the Orders tab. Returns the generated OrderID."""
+    from utils.auth import impersonation_block
+    blocked = impersonation_block()
+    if blocked:
+        # A clean stop, not an exception: the cloud redacts tracebacks into
+        # noise, and "why can't I save" deserves a sentence, not a stack.
+        import streamlit as st
+        st.error(blocked)
+        st.stop()
     order_id, row = _order_row(order_data)
     _on_orders_ws(lambda ws: ws.insert_row(row, index=2, value_input_option="USER_ENTERED"))
     # write-through: new order goes to the top (insert_row index=2)
@@ -231,6 +239,14 @@ def update_order(client: gspread.Client, order_id: str, updates: dict):
         order_id: the OrderID to update
         updates: dict of {column_header: new_value}
     """
+    from utils.auth import impersonation_block
+    blocked = impersonation_block()
+    if blocked:
+        # A clean stop, not an exception: the cloud redacts tracebacks into
+        # noise, and "why can't I save" deserves a sentence, not a stack.
+        import streamlit as st
+        st.error(blocked)
+        st.stop()
     if not updates:
         return
 
@@ -277,5 +293,13 @@ def update_order(client: gspread.Client, order_id: str, updates: dict):
 
 def update_checklist(client: gspread.Client, order_id: str, checklist: list[dict]):
     """Update the checklist JSON for an order."""
+    from utils.auth import impersonation_block
+    blocked = impersonation_block()
+    if blocked:
+        # A clean stop, not an exception: the cloud redacts tracebacks into
+        # noise, and "why can't I save" deserves a sentence, not a stack.
+        import streamlit as st
+        st.error(blocked)
+        st.stop()
     checklist_json = json.dumps(checklist, ensure_ascii=False)
     update_order(client, order_id, {"ChecklistJSON": checklist_json})

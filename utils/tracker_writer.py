@@ -82,6 +82,20 @@ FIELD_HEADERS = {
 REQUIRED_HEADERS = ("place", "holder")
 
 
+def _no_writes_while_viewing() -> str:
+    """Every writer's first practical check: nothing lands in a sheet while a
+    View-as is active.
+
+    The guard sits here in the writers, not in the pages, so a write path
+    nobody remembered to update still cannot put somebody else's name into
+    the ledger. Reads stay open — viewing as a person is the feature; writing
+    as one is the lie this exists to prevent.
+    """
+    from utils.auth import impersonation_block
+    return impersonation_block()
+
+
+
 def _header_row(grid: List[List[str]]) -> Tuple[int, List[str]]:
     """(index, cells) of the part tab's header row."""
     for i, row in enumerate(grid[:10]):
@@ -132,6 +146,9 @@ def write_order(mcode: str, ordered_by: str, ordered_from: str,
     """
     if not mcode.strip():
         return False, "No M-code: the order can't be filed against a part."
+    blocked = _no_writes_while_viewing()
+    if blocked:
+        return False, blocked
 
     spreadsheet = get_spreadsheet(sheet_id)
     if spreadsheet is None:
@@ -193,6 +210,9 @@ def write_receipt(mcode: str, *, order_id: str = "", qty_ordered: str = "",
     """
     if not mcode.strip():
         return False, "No M-code: nothing to file the receipt against."
+    blocked = _no_writes_while_viewing()
+    if blocked:
+        return False, blocked
     spreadsheet = get_spreadsheet(sheet_id)
     if spreadsheet is None:
         return False, "No Google credentials — nothing written."
@@ -237,6 +257,9 @@ def append_history(mcode: str, fields: dict,
     """
     if not mcode.strip():
         return False, "No M-code: nothing to file the entry against."
+    blocked = _no_writes_while_viewing()
+    if blocked:
+        return False, blocked
     spreadsheet = get_spreadsheet(sheet_id)
     if spreadsheet is None:
         return False, "No Google credentials — nothing written."
@@ -291,6 +314,9 @@ def append_event(mcode: str, *, holder: str, location: str, date: str,
     """
     if not mcode.strip():
         return False, "No M-code: nothing to file the event against."
+    blocked = _no_writes_while_viewing()
+    if blocked:
+        return False, blocked
     spreadsheet = get_spreadsheet(sheet_id)
     if spreadsheet is None:
         return False, "No Google credentials — nothing written."
@@ -347,6 +373,10 @@ def write_orders(orders, sheet_id: Optional[str] = None) -> dict:
     falls back to `write_order`, whose append is race-safe. Slower, and correct.
     """
     out = {"filed": [], "errors": []}
+    blocked = _no_writes_while_viewing()
+    if blocked:
+        out["errors"].append(blocked)
+        return out
     if not orders:
         return out
 

@@ -266,6 +266,12 @@ def record_movement(part_id: str, project: str, qty: int, to_holder: str,
     out: Dict[str, object] = {"ok": False, "problem": "",
                               "history_row": [], "stock_changes": []}
 
+    from utils.auth import impersonation_block
+    blocked = impersonation_block()
+    if blocked:
+        out["problem"] = blocked
+        return out
+
     part_id = str(part_id or "").strip()
     project = str(project or "").strip()
     to_holder = str(to_holder or "").strip()

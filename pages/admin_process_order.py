@@ -941,7 +941,10 @@ def messages_section(order_id: str, user_name: str):
     if sent and new_msg.strip():
         msg_client = get_gspread_client()
         if msg_client:
-            send_message(msg_client, order_id, user_name, new_msg.strip())
+            try:
+                send_message(msg_client, order_id, user_name, new_msg.strip())
+            except RuntimeError as _e:
+                st.error(str(_e))
             st.rerun(scope="fragment")
 
 

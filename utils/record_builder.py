@@ -334,6 +334,10 @@ def write_overview(project: str, built_by: str, sheet_id: Optional[str] = None,
     Refuses to overwrite existing rows unless `replace` — the tab is derived,
     but a human may still have typed in it, and this is a full-block write.
     """
+    from utils.auth import impersonation_block
+    blocked = impersonation_block()
+    if blocked:
+        return {"written": 0, "problem": blocked}
     from utils.google_client import get_spreadsheet
     from utils import tracker_parse
 

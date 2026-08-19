@@ -85,6 +85,14 @@ def _clear_cache():
 
 def add_user(client: gspread.Client, email: str, name: str, role: str):
     """Add a user to the Users tab."""
+    from utils.auth import impersonation_block
+    blocked = impersonation_block()
+    if blocked:
+        # A clean stop, not an exception: the cloud redacts tracebacks into
+        # noise, and "why can't I save" deserves a sentence, not a stack.
+        import streamlit as st
+        st.error(blocked)
+        st.stop()
     def _do(ws: gspread.Worksheet):
         col_a = ws.col_values(1)
         next_row = len(col_a) + 1
@@ -97,6 +105,14 @@ def add_user(client: gspread.Client, email: str, name: str, role: str):
 
 def remove_user(client: gspread.Client, email: str):
     """Remove a user from the Users tab by email."""
+    from utils.auth import impersonation_block
+    blocked = impersonation_block()
+    if blocked:
+        # A clean stop, not an exception: the cloud redacts tracebacks into
+        # noise, and "why can't I save" deserves a sentence, not a stack.
+        import streamlit as st
+        st.error(blocked)
+        st.stop()
     if email.lower().strip() == FALLBACK_ADMIN["email"]:
         raise ValueError("Cannot remove the primary admin account")
 
@@ -116,6 +132,14 @@ def remove_user(client: gspread.Client, email: str):
 
 def update_user_role(client: gspread.Client, email: str, new_role: str):
     """Update a user's role."""
+    from utils.auth import impersonation_block
+    blocked = impersonation_block()
+    if blocked:
+        # A clean stop, not an exception: the cloud redacts tracebacks into
+        # noise, and "why can't I save" deserves a sentence, not a stack.
+        import streamlit as st
+        st.error(blocked)
+        st.stop()
     target_email = email.lower().strip()
 
     def _do(ws: gspread.Worksheet):

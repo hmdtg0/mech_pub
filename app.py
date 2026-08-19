@@ -8,7 +8,8 @@ import streamlit as st
 
 st.set_page_config(page_title="Mech Order Helper", page_icon="🔩", layout="wide")
 
-from utils.auth import get_current_user, is_admin, is_logistics, require_auth
+from utils.auth import (get_current_user, impersonation, is_admin,
+                        is_logistics, require_auth)
 from utils import project_registry
 
 # --- Active project (one Google Sheet per project) ---
@@ -183,6 +184,46 @@ with st.sidebar:
     role_badge = "🔑 Admin" if is_admin(user) else "📦 Logistics" if is_logistics(user) else "👤 Engineer"
     st.markdown(f"{role_badge} **{user['name']}**")
     st.caption(user["email"])
+
+    # --- View as: see the app as a teammate does (admins only) --------------
+    # The PCB tool answered this need by letting anyone LOG IN as anyone —
+    # which meant the ledger recorded whoever was claimed, not whoever acted.
+    # This is the honest version: the rendering, role and matching become the
+    # target's, the writers all refuse while it is active, and the real
+    # identity stays pinned underneath.
+    _real = impersonation() or user
+    if _real.get("role") == "admin":
+        from utils.user_store import fetch_allowed_users
+
+        _by_name = {}
+        for _e, _i in sorted(fetch_allowed_users().items()):
+            if _e == _real.get("email"):
+                continue
+            _by_name.setdefault("%s (%s)" % (_i["name"], _i["role"]), _e)
+        _me = "— myself —"
+        _options = [_me] + sorted(_by_name)
+        _active = st.session_state.get("view_as", "")
+        _index = 0
+        for _n, _e in _by_name.items():
+            if _e == _active:
+                _index = _options.index(_n)
+        _picked_view = st.selectbox(
+            "👁 View as", _options, index=_index, key="view_as_picker",
+            help="Renders the app exactly as this person sees it — their "
+                 "pages, their My Orders. Recording anything is disabled "
+                 "until you switch back: the ledger only ever carries the "
+                 "name that actually acted.")
+        _target = "" if _picked_view == _me else _by_name[_picked_view]
+        if _target != _active:
+            if _target:
+                st.session_state["view_as"] = _target
+            else:
+                st.session_state.pop("view_as", None)
+                st.session_state.pop("view_as_real", None)
+            st.rerun()
+    if impersonation():
+        st.warning("Viewing as **%s** — writes are disabled. You are %s."
+                   % (user["name"], impersonation().get("email", "?")))
     # Logout has to tell the truth about WHERE the identity lives, because it
     # is different in each mode — and the old unconditional
     # `del st.session_state["auth_email"]` crashed the whole app the moment

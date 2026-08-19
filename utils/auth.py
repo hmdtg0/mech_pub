@@ -152,6 +152,52 @@ def _prompt_name_login() -> str:
     return st.session_state.get("auth_email", "")
 
 
+def impersonation() -> "dict | None":
+    """The REAL person behind a "View as", or None when nobody is pretending.
+
+    "View as" lets an admin see the app exactly as a teammate does — their
+    role's navigation, their My Orders — without what the PCB tool did, which
+    was let anyone BE anyone. The difference is enforced one layer down:
+    while a view-as is active, every writer refuses (see impersonation_block),
+    so the ledger can never carry a name that did not act.
+    """
+    return st.session_state.get("view_as_real") or None
+
+
+def impersonation_block() -> str:
+    """Why writes are refused right now — "" when they are allowed.
+
+    Called by every function that writes to a sheet, as its first line. The
+    guard lives in the writers rather than the pages so that a page nobody
+    remembered to update still cannot write somebody else's name into the
+    ledger.
+    """
+    real = impersonation()
+    if not real:
+        return ""
+    return ("Viewing as someone else (you are %s) — writes are disabled "
+            "while a View-as is active. Switch back to yourself to record "
+            "anything." % real.get("email", "?"))
+
+
+def _viewed_user() -> "dict | None":
+    """The person an admin is currently viewing as, or None.
+
+    Only an admin can view-as, the target must be on the Users tab, and the
+    REAL identity is kept in session state for the writers' guard and the
+    sidebar's "viewed by" line.
+    """
+    target = st.session_state.get("view_as", "")
+    if not target:
+        return None
+    info = _get_allowed_users().get(target)
+    if info is None:
+        st.session_state.pop("view_as", None)
+        st.session_state.pop("view_as_real", None)
+        return None
+    return {"email": target, "name": info["name"], "role": info["role"]}
+
+
 def get_current_user(prompt: bool = True) -> dict | None:
     """{email, name, role} for the current person, or None.
 
@@ -166,8 +212,9 @@ def get_current_user(prompt: bool = True) -> dict | None:
         # setup. Set MECH_ADMIN_EMAIL to your own address: every write is
         # stamped with it, and "dev@localhost" in the ledger tells nobody
         # anything.
-        return {"email": PRIMARY_ADMIN_EMAIL or "dev@localhost",
+        real = {"email": PRIMARY_ADMIN_EMAIL or "dev@localhost",
                 "name": PRIMARY_ADMIN_NAME, "role": "admin"}
+        return _apply_view_as(real)
 
     email = verified_email()
     if not email and _name_login_allowed():
@@ -182,7 +229,32 @@ def get_current_user(prompt: bool = True) -> dict | None:
     info = _get_allowed_users().get(email)
     if info is None:
         return None
-    return {"email": email, "name": info["name"], "role": info["role"]}
+    return _apply_view_as(
+        {"email": email, "name": info["name"], "role": info["role"]})
+
+
+def _apply_view_as(real: dict) -> dict:
+    """The user the app should RENDER for — the view-as target when an admin
+    has one active, the real person otherwise.
+
+    The target's name, email and role are returned whole, because seeing the
+    app as someone means matching as them too (My Orders matches on name and
+    contact email). What keeps this honest is the writers' guard: the real
+    identity is pinned in session state and every write refuses while it is
+    there.
+    """
+    if real.get("role") != "admin":
+        # Only admins view-as; anything a non-admin managed to leave in
+        # session state is cleared rather than honoured.
+        st.session_state.pop("view_as", None)
+        st.session_state.pop("view_as_real", None)
+        return real
+    viewed = _viewed_user()
+    if viewed is None or viewed["email"] == real["email"]:
+        st.session_state.pop("view_as_real", None)
+        return real
+    st.session_state["view_as_real"] = real
+    return viewed
 
 
 def require_auth() -> dict:
