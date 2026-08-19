@@ -29,6 +29,13 @@ from utils import bom_sheet, parts_model, parts_tracker, project_registry
 # BOM values contain newlines (Material) and pipes (Spec), which the older
 # packed-string format truncated silently.
 META_ROW_1 = ("Part ID", "Part Name")
+# E1/F1 on every part tab: the tab's CURRENT order, as central Orders knows
+# it. The title is written at build time with an empty value — the value is
+# stamped by bulk_orders when the order is actually raised. Tabs built before
+# 19 Aug 2026 only have the pair because the old order-form flow wrote it;
+# the builder itself never did, so a new project's tabs were missing it
+# (Hamid, 19 Aug).
+META_ORDER_LABEL = "order ID"
 META_ROW_2 = ("Type", "Material", "Spec", "Default owner")
 
 # Row 3 — the ledger. Read back by tracker_parse.PART_FIELDS.
@@ -137,7 +144,8 @@ def plan(project: str, sheet_id: Optional[str] = None,
 
 def _meta_rows(part: dict, owner: str) -> List[List[str]]:
     return [
-        [META_ROW_1[0], part["title"], META_ROW_1[1], part["part_name"]],
+        [META_ROW_1[0], part["title"], META_ROW_1[1], part["part_name"],
+         META_ORDER_LABEL, ""],
         [META_ROW_2[0], part["type"], META_ROW_2[1], part["material"],
          META_ROW_2[2], part["spec"], META_ROW_2[3], owner],
         list(LEDGER),

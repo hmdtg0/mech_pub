@@ -155,6 +155,9 @@ _META_LABELS = {
     "material": "material",
     "spec": "spec",
     "defaultowner": "defaultowner",
+    # E1/F1 — the tab's current order as central Orders knows it. Was never
+    # in this map, so even tabs that HAD the pair parsed without it.
+    "orderid": "order_id",
 }
 
 

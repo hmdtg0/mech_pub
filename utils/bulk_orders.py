@@ -95,6 +95,29 @@ def submit(project: str, record_id: str, user: dict, rows: List[dict],
     out["filed"] = filed["filed"]
     out["errors"].extend(filed["errors"])
 
+    # Stamp each filed tab's E1:F1 with its central order id — the tab-level
+    # pointer every pre-19-Aug tab carries. The old order-form flow wrote it;
+    # its removal left F1 forever empty on anything new. Writing the label
+    # too self-heals a tab built without the pair. One batched call; a
+    # failure here is reported, not fatal — the ledger line already carries
+    # the same id per row.
+    if out["filed"]:
+        by_code = {r.get("m_code", ""): oid
+                   for r, oid in zip(rows, out["orders"])}
+        data = [{"range": "'%s'!E1:F1" % code.replace("'", "''"),
+                 "values": [["order ID", by_code[code]]]}
+                for code in out["filed"] if by_code.get(code)]
+        try:
+            from utils.google_client import get_spreadsheet
+            ss = get_spreadsheet(record_id)
+            if ss is not None and data:
+                ss.values_batch_update(
+                    {"valueInputOption": "USER_ENTERED", "data": data})
+        except Exception as exc:
+            out["errors"].append(
+                "Orders filed, but the tabs' order-ID cells (E1:F1) were not "
+                "stamped: %s" % exc)
+
     if out["filed"]:
         parts_tracker.refresh(record_id)
     return out
