@@ -5,7 +5,7 @@ import pandas as pd
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import DOMAIN_ALIASES, PRIMARY_ADMIN_EMAIL
+from config import DOMAIN_ALIASES, PRIMARY_ADMIN_EMAILS
 from utils.auth import require_role
 from utils.ui import table_height
 from utils.google_client import get_gspread_client
@@ -138,7 +138,7 @@ st.warning("This action cannot be undone!")
 # admin locks everyone out of the page that could undo it. Who that is comes
 # from MECH_ADMIN_EMAIL rather than a name written into the source.
 # You also cannot remove yourself, which is the same mistake by a shorter route.
-_protected = {PRIMARY_ADMIN_EMAIL, user.get("email", "")} - {""}
+_protected = (set(PRIMARY_ADMIN_EMAILS) | {user.get("email", "")}) - {""}
 removable = [e for e in sorted(users.keys()) if e not in _protected]
 remove_email = st.selectbox("Select user to remove", ["-- Select --"] + removable, key="remove_select")
 

@@ -237,15 +237,22 @@ MESSAGES_TTL_SECONDS = int(os.environ.get("MECH_MESSAGES_TTL", "30"))
 # the source — fine in a private repo, not fine in a public one, and wrong in
 # either if somebody else installs this (19 Aug 2026).
 #
-#   MECH_ADMIN_EMAIL   the address that always keeps admin, and the identity
-#                      local development runs as
+#   MECH_ADMIN_EMAIL   the address(es) that always keep admin — one person
+#                      often has two spellings across sister domains, so this
+#                      takes a comma-separated list. The FIRST is the identity
+#                      local development runs as and the one a fresh Users tab
+#                      is seeded with; every listed one is protected from
+#                      removal and kept admin by the fallback.
 #   MECH_ADMIN_NAME    how that person is shown
 #
 # Unset is a valid state and fails CLOSED: no fallback admin, so an
 # unreadable Users tab lets nobody in rather than letting in whoever the
 # source happens to name. That costs nothing real — every page needs the
 # sheets anyway, so if they are unreachable the app has nothing to show.
-PRIMARY_ADMIN_EMAIL = os.environ.get("MECH_ADMIN_EMAIL", "").strip().lower()
+PRIMARY_ADMIN_EMAILS = tuple(
+    e.strip().lower() for e in os.environ.get("MECH_ADMIN_EMAIL", "").split(",")
+    if e.strip())
+PRIMARY_ADMIN_EMAIL = PRIMARY_ADMIN_EMAILS[0] if PRIMARY_ADMIN_EMAILS else ""
 PRIMARY_ADMIN_NAME = os.environ.get("MECH_ADMIN_NAME", "").strip() or "Admin"
 
 # Some teams use two interchangeable email domains for the same people, and
@@ -258,7 +265,5 @@ _aliases = [d.strip().lower().lstrip("@")
             if d.strip()]
 DOMAIN_ALIASES = tuple(_aliases) if len(_aliases) == 2 else None
 
-ALLOWED_USERS = (
-    {PRIMARY_ADMIN_EMAIL: {"name": PRIMARY_ADMIN_NAME, "role": "admin"}}
-    if PRIMARY_ADMIN_EMAIL else {}
-)
+ALLOWED_USERS = {email: {"name": PRIMARY_ADMIN_NAME, "role": "admin"}
+                 for email in PRIMARY_ADMIN_EMAILS}
