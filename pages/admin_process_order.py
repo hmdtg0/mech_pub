@@ -54,6 +54,12 @@ if not orders:
     st.info("No orders to process.")
     st.stop()
 
+# The worklist spans every project (writes are safe either way — each order
+# is filed to ITS OWN project's record, resolved per order below).
+orders = ui.project_filter(orders, key="po_project")
+_multi_project = len({(o.get("Project") or "").strip() for o in orders
+                      if (o.get("Project") or "").strip()}) > 1
+
 def _rank(s: str) -> int:
     return ORDER_STATUSES.index(s) if s in ORDER_STATUSES else 0
 
@@ -181,7 +187,10 @@ def render_orders(order_list, key_prefix):
                 st.markdown(f"{icon}")
             with cols[1]:
                 owner_bit = f" — 👤 {owner}" if owner else ""
-                st.markdown(f"**{part}** `{pid}`{owner_bit} {pri_icon}")
+                ptag = (project_colors.tag((o.get("Project") or "").strip()) + " "
+                        if _multi_project and (o.get("Project") or "").strip()
+                        else "")
+                st.markdown(f"{ptag}**{part}** `{pid}`{owner_bit} {pri_icon}")
             with cols[2]:
                 st.markdown(f"`{effective.upper()}`")
             with cols[3]:

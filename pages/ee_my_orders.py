@@ -12,7 +12,7 @@ import streamlit as st
 from config import STATUS_COLORS
 from utils import parts_tracker, project_colors, project_registry, tracker_orders
 from utils.auth import require_auth
-from utils.ui import table_height
+from utils.ui import project_filter, table_height
 
 user = require_auth()
 
@@ -39,6 +39,7 @@ for o in tracker_orders.all_part_orders():
         o["why_mine"] = ", ".join(why)
         tracker_mine.append(o)
 
+tracker_mine = project_filter(tracker_mine, key="myo_project")
 st.markdown("### From the project tracker (%d)" % len(tracker_mine))
 st.caption("One line per part — the order its tab was opened with. Yours if "
            "you are the part's **owner** (responsible for it, from the BOM), "

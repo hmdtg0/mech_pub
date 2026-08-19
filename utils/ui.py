@@ -115,3 +115,64 @@ def render_movement(row: dict, notes: bool = True) -> None:
             st.markdown(literal(note))
         else:
             st.caption("No notes.")
+
+
+def project_scope(purpose: str, key: str = "page_project") -> str:
+    """Say — changeably — which project this page WRITES to.
+
+    The sidebar switcher is global but easy to miss at the exact moment it
+    matters: a mass submit. "Which record did that just go to" is the wrong
+    question to be asking after the fact (Hamid, 19 Aug), so a page that
+    files orders states its target where the orders are, with the switch in
+    arm's reach. One truth underneath — this and the sidebar move the same
+    session state.
+    """
+    import streamlit as st
+
+    from utils import project_colors, project_registry
+
+    active, _sheet = project_registry.active()
+    names = list(project_registry.all_projects())
+    if not names:
+        return active
+    c1, c2 = st.columns([1.6, 3.4], vertical_alignment="center")
+    with c1:
+        picked = st.selectbox(
+            "Project", names,
+            index=names.index(active) if active in names else 0, key=key)
+    with c2:
+        st.markdown(project_colors.badge_html(picked), unsafe_allow_html=True)
+        st.caption(purpose)
+    if picked != active:
+        project_registry.set_active(picked)
+        # Keep the sidebar switcher agreeing, or its stale widget state
+        # flips the project straight back on the next rerun.
+        st.session_state["sidebar_project"] = picked
+        st.rerun()
+    return picked
+
+
+def project_filter(rows, key: str, fields=("project", "Project")):
+    """A cross-project listing, narrowed to one project by selectbox.
+
+    Rendered even while a single project is live: the control tells the
+    reader this listing spans projects, and the day a second project lands
+    it already works (Hamid, 19 Aug — pages that show every project need a
+    filter).
+    """
+    import streamlit as st
+
+    def _of(row):
+        for f in fields:
+            value = str(row.get(f) or "").strip()
+            if value:
+                return value
+        return ""
+
+    names = sorted({_of(r) for r in rows if _of(r)})
+    if not names:
+        return rows
+    picked = st.selectbox("Project", ["all projects"] + names, key=key)
+    if picked == "all projects":
+        return rows
+    return [r for r in rows if _of(r) == picked]

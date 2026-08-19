@@ -22,8 +22,11 @@ st.caption("Delivered and cancelled orders")
 # --- Completed orders from the project trackers -----------------------------
 # "Complete" on the sheet means the receipt row took delivery of everything the
 # origin row ordered.
-_tracker_done = [o for o in tracker_orders.all_projects_orders()
-                 if tracker_orders.is_complete(o)]
+from utils import ui as _ui
+
+_tracker_done = _ui.project_filter(
+    [o for o in tracker_orders.all_projects_orders()
+     if tracker_orders.is_complete(o)], key="hist_project")
 
 st.markdown("### From the project trackers — completed (%d)" % len(_tracker_done))
 tracker_order_ui.render_section(

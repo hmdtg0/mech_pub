@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from utils.auth import require_auth
 from utils import app_settings, bom_sheet, parts_model, parts_tracker, project_colors, project_registry
-from utils.ui import require_project, table_height
+from utils.ui import project_scope, require_project, table_height
 
 # Reviewer is deliberately not collected here — deferred to a later phase. The
 # Orders row keeps its Reviewer column and takes it blank.
@@ -51,6 +51,9 @@ if not bom_rows:
                "project on **Tools → Projects**.")
     st.stop()
 
+project_scope("Every order submitted on this page is filed to THIS "
+              "project's record and read from its BOM — check it before a "
+              "mass submit, not after.")
 st.markdown("Reading **%d parts** from `%s`." % (len(bom_rows), build_tab))
 
 
@@ -430,8 +433,10 @@ if no_tab:
 for p in problems:
     st.error(p)
 
-confirmed = st.checkbox("I have reviewed all %d order(s)" % len(chosen),
-                        key="ofb_confirm", disabled=bool(problems))
+confirmed = st.checkbox(
+    "I have reviewed all %d order(s) — they will be filed to %s's record"
+    % (len(chosen), project),
+    key="ofb_confirm", disabled=bool(problems))
 if st.button("📤 Submit %d order(s)" % len(chosen), type="primary",
              disabled=bool(problems) or not confirmed, key="ofb_submit"):
     from utils import bulk_orders

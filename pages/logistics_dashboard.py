@@ -24,6 +24,10 @@ user = require_auth()
 
 st.title("📦 Logistics Dashboard")
 st.markdown(f"Welcome, **{user['name']}**")
+_active_name, _ = project_registry.active()
+st.caption("Order queues below span **every project** (rows are tagged when "
+           "more than one is live). *Recent Movements* and *Parts Short* "
+           "follow the sidebar's project — currently **%s**." % _active_name)
 
 client = get_gspread_client()
 # Orders are central: one tab for every project, each row tagged Project.

@@ -6,7 +6,7 @@ import streamlit as st
 
 from utils.auth import require_role
 from utils.google_client import get_gspread_client
-from utils import project_colors, tracker_order_ui, tracker_orders
+from utils import project_colors, tracker_order_ui, tracker_orders, ui
 from utils.orders_store import (
     fetch_all_orders, fetch_order_by_id, update_order,
 )
@@ -214,7 +214,8 @@ st.caption("Delivered/cancelled orders are moved to **Order History** — see si
 # --- Open orders recorded on the project trackers ---------------------------
 # On the sheet an order is a pair of rows (origin + receipt); it counts as open
 # until the receipt row has taken delivery of everything ordered.
-_tracker_all = tracker_orders.all_projects_orders()
+_tracker_all = ui.project_filter(tracker_orders.all_projects_orders(),
+                                 key="ao_project")
 _tracker_open = [o for o in _tracker_all if not tracker_orders.is_complete(o)]
 
 st.markdown("### From the project trackers — open (%d of %d)"
