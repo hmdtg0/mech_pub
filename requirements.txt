@@ -1,0 +1,17 @@
+# Pinned to what the app was built and verified against (19 Aug 2026).
+#
+# These were ranges (`streamlit>=1.36.0`), which is fine on a machine where
+# the installed version stays put and wrong for a deploy: Streamlit Cloud
+# installs the newest release each time it builds, so the app would run on a
+# version nobody has tried. This one leans on 1.38 behaviour in particular —
+# fragment-scoped reruns, pixel column widths, and the fact that a toast does
+# not survive `st.rerun()` (the whole `flash()` pattern exists because of it).
+#
+# Raising a pin is a deliberate change: bump it, run the tests, click through
+# the pages, then commit. Not something a redeploy should decide on its own.
+streamlit==1.38.0
+pandas==2.0.3
+gspread==6.2.1
+google-auth==2.50.0
+google-api-python-client==2.198.0
+deep-translator==1.11.4

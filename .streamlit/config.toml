@@ -1,0 +1,11 @@
+[server]
+maxUploadSize = 200
+
+[theme]
+# The original repo sets only primaryColor, so its appearance follows each
+# viewer's system light/dark preference — which is why the same app looks
+# light on one machine and dark on another. Pinned to light here so every
+# user sees the same UI as the PCB tool's screenshots. Delete this line to
+# go back to following the viewer's system setting.
+base = "light"
+primaryColor = "#1E88E5"
