@@ -32,15 +32,23 @@ with head2:
 # speaking it is what we have in the first history line of each part tab"
 # (Hamid, 18 Aug). Quantities and status are the ledger's latest word.
 # Only these fields + a jump to Part Detail; no expanders.
-tracker_mine = [o for o in tracker_orders.all_part_orders()
-                if tracker_orders.is_mine(o, user["name"], user["email"])]
+tracker_mine = []
+for o in tracker_orders.all_part_orders():
+    why = tracker_orders.mine_reasons(o, user["name"], user["email"])
+    if why:
+        o["why_mine"] = ", ".join(why)
+        tracker_mine.append(o)
 
 st.markdown("### From the project tracker (%d)" % len(tracker_mine))
-st.caption("One line per part — the order its tab was opened with. "
-           "Quantity and status follow the ledger's latest word.")
+st.caption("One line per part — the order its tab was opened with. Yours if "
+           "you are the part's **owner** (responsible for it, from the BOM), "
+           "its current **holder** (the goods sit with you), or you **raised "
+           "it**. Each row says which. Quantity and status follow the "
+           "ledger's latest word.")
 
 if not tracker_mine:
-    st.info("No tracker order names you as its raiser.")
+    st.info("Nothing here concerns you yet — no part lists you as its owner "
+            "or holder, and none was raised by you.")
 else:
     tab_table, tab_rows = st.tabs([
         "📋 Table View (%d)" % len(tracker_mine),
@@ -56,6 +64,7 @@ else:
             "Qty (rec/ord)": "%s/%s" % (o["qty_received"],
                                         o["qty_ordered"] or "?"),
             "Status": (o["derived"] or "").capitalize(),
+            "Yours as": o.get("why_mine", ""),
         } for o in tracker_mine]), hide_index=True, use_container_width=True,
             height=table_height(len(tracker_mine)))
 
@@ -66,10 +75,11 @@ else:
             chip = (":%s[%s]" % (STATUS_COLORS.get(status, "gray"),
                                  status.upper()) if status else "—")
             with row1:
-                st.markdown("%s | **%s** — %s | `%s` | %s/%s | %s" % (
+                st.markdown("%s | **%s** — %s | `%s` | %s/%s | %s · _%s_" % (
                     project_colors.tag(o["project"]), o["mcode"],
                     o["part_name"] or "?", o["version"] or "no version",
-                    o["qty_received"], o["qty_ordered"] or "?", chip))
+                    o["qty_received"], o["qty_ordered"] or "?", chip,
+                    o.get("why_mine", "")))
             with row2:
                 if st.button("🔍 Detail", use_container_width=True,
                              key="tr_detail_%s_%s" % (o["project"], o["mcode"])):

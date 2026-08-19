@@ -97,15 +97,27 @@ def _name_key(name: str) -> List[str]:
     return [w for w in re.split(r"[^\w]+", str(name).lower()) if w]
 
 
-def holder_matches(person: str, holder: str) -> bool:
+def holder_matches(person: str, holder: str, email: str = "") -> bool:
     """Whether an app user and a sheet Holder are the same person.
 
-    The sheet writes full names ("Sam Smith") while the app's user list often
-    holds first names ("Sam"), so a match is: every word of the shorter name
-    appears in the longer one. Deliberately generous — the cost of a miss (an
-    order that never shows on My Orders) is worse than the cost of a loose
-    match within one small team.
+    Two independent paths, exact-first:
+
+    - **Contact email.** If the Holders directory lists a contact for this
+      holder, an exact email match settles it. This is the only thing that
+      connects registers a string cannot — the user list says "Joseph", the
+      sheets say "Joe H", and no substring joins them ("Joseph" does not even
+      start with "Joe": J-O-S). The names differ; the address does not.
+    - **Name words.** The sheet writes full names ("Sam Smith") while the
+      user list often holds first names ("Sam"), so every word of the
+      shorter name must appear in the longer one. Whole words only —
+      prefix-matching was tried and reverted, because it fixed no real case
+      and would happily merge similar names.
     """
+    if email and str(holder).strip():
+        from utils import holders_store
+        contact = str(holders_store.get(holder).get("contact", "")).strip().lower()
+        if contact and contact == str(email).strip().lower():
+            return True
     a, b = _name_key(person), _name_key(holder)
     if not a or not b:
         return False
@@ -337,8 +349,8 @@ def part_orders(sheet_id: Optional[str] = None,
     part's order story.
     """
     parts = parts_tracker.fetch_all_parts(sheet_id)
-    names = {r.get("mcode", ""): r.get("part_name", "")
-             for r in parts_tracker.fetch_overview(sheet_id)}
+    overview = {r.get("mcode", ""): r
+                for r in parts_tracker.fetch_overview(sheet_id)}
     out = []
     for mcode, part in sorted(parts.items()):
         history = part.get("history", [])
@@ -346,11 +358,12 @@ def part_orders(sheet_id: Optional[str] = None,
             continue
         first = history[0]
         meta = part.get("meta", {})
+        ov = overview.get(mcode, {})
         out.append({
             "project": project,
             "sheet_id": sheet_id or "",
             "mcode": mcode,
-            "part_name": meta.get("part_name") or names.get(mcode, ""),
+            "part_name": meta.get("part_name") or ov.get("part_name", ""),
             "order_id": first.get("order_id", ""),
             "date": first.get("date", ""),
             "version": _latest(history, "version"),
@@ -362,6 +375,10 @@ def part_orders(sheet_id: Optional[str] = None,
                            else tracker_parse.holder_of(first)),
             "logged_by": first.get("logged_by", ""),
             "derived": derived_status(history),
+            # Who the part concerns, for My Orders: responsibility and
+            # custody are different questions, so both travel with the row.
+            "owner": ov.get("owner", ""),
+            "holder": ov.get("holder", ""),
         })
     return out
 
@@ -381,17 +398,37 @@ def orders_for_person(person: str, sheet_id: Optional[str] = None,
             if holder_matches(person, o["ordered_by"])]
 
 
-def is_mine(order: dict, name: str, email: str = "") -> bool:
-    """Whether this person raised the order.
+def mine_reasons(order: dict, name: str, email: str = "") -> List[str]:
+    """Why this order is this person's — empty when it is not.
 
-    Named in the raise line's From — or, because the migrated ledger often
-    puts the vendor there instead, the one whose login wrote the raise line
-    (Logged By carries the email, as the reference record does).
+    An order concerns you if you are its **owner** (the part's Default Owner
+    from the BOM — the responsibility) or its **holder** (where the goods
+    physically sit now — the custody). Those answer different questions, so
+    both count (Hamid, 19 Aug: "ordered owner and holder"). Being named on
+    the raise line, or being the login that wrote it, also counts — you
+    raised it, you follow it.
+
+    Returned as words rather than a bool so the page can SAY why a row is
+    shown; an inspectable rule gets corrected, an invisible one gets
+    distrusted. Before this, matching was against the raise line only —
+    which the migration mostly filled with vendor names, so Joe saw an empty
+    page and Jimmy saw 21 orders by coincidence of wording.
     """
-    if holder_matches(name, order.get("ordered_by", "")):
-        return True
+    reasons = []
+    if holder_matches(name, order.get("owner", ""), email):
+        reasons.append("owner")
+    if holder_matches(name, order.get("holder", ""), email):
+        reasons.append("holder")
     logged = str(order.get("logged_by", "")).strip().lower()
-    return bool(email) and logged == str(email).strip().lower()
+    if (holder_matches(name, order.get("ordered_by", ""), email)
+            or (bool(email) and logged == str(email).strip().lower())):
+        reasons.append("raised it")
+    return reasons
+
+
+def is_mine(order: dict, name: str, email: str = "") -> bool:
+    """Whether this order concerns this person — see mine_reasons."""
+    return bool(mine_reasons(order, name, email))
 
 
 def effective_status(stored: str, derived: str) -> str:
