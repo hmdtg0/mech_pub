@@ -11,6 +11,11 @@
 # the pages, then commit. Not something a redeploy should decide on its own.
 streamlit==1.38.0
 pandas==2.0.3
+# pandas 2.0.3 ships C extensions built against numpy 1.x. Left unpinned, a
+# fresh install resolves numpy 2.x and pandas dies at import ("ValueError" in
+# pandas._libs) — which is exactly how the first cloud deploy went down.
+# 1.24.4 is what the app is verified against, and installs on 3.8 and 3.11.
+numpy==1.24.4
 gspread==6.2.1
 google-auth==2.50.0
 google-api-python-client==2.198.0
