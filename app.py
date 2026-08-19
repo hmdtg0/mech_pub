@@ -25,19 +25,22 @@ st.session_state["active_sheet_id"] = _current_sheet
 # when a page asks for data, not a timer — no question, no call.
 
 # --- Auth gate ---
-user = get_current_user()
+# Peek WITHOUT drawing anything: whether to build the real navigation is
+# decided first, and only then does require_auth render the login screen —
+# the picker, or the explanation of which gate refused. Drawing from both
+# places put two identical pickers on the page and collided their widget ids.
+user = get_current_user(prompt=False)
 
 if user is None:
     # Nobody signed in that we recognise. Show ONLY this page — the nav is
-    # hidden so the page list cannot be discovered by someone the app has not
-    # identified — and let require_auth explain which of the two gates
-    # refused: an unverified request and an unknown address need different
-    # fixes. It stops the script either way, so nothing below runs.
+    # hidden so the page list cannot be discovered by someone the app has
+    # not identified. require_auth stops the script unless a name is picked
+    # on this very run, in which case rerun into the real app.
     st.navigation([st.Page(lambda: None, title="Login", icon="🔒")],
                   position="hidden")
     st.title("🔩 Mech Order Helper")
     require_auth()
-    st.stop()
+    st.rerun()
 
 # Store user in session state
 st.session_state["user"] = user
@@ -66,9 +69,7 @@ tools_common = [
     st.Page("pages/4_Translator.py", title="Translator", icon="🌐"),
 ]
 
-admin_pages = []
 status_pages = []
-logistics_pages = []
 
 # Logistics keeps its own dashboard, as in the PCB tool — shipping/receiving
 # is a different job from raising and processing orders.
@@ -76,12 +77,20 @@ logistics_pages = [
     st.Page("pages/logistics_dashboard.py", title="Logistics", icon="📦"),
 ]
 
+# The WORK pages — receiving goods, recording movements, correcting history —
+# belong to everyone who handles parts, not only admins (19 Aug 2026). The
+# page-level require_role was opened to engineer + logistics, but a page
+# st.navigation does not register is unreachable no matter what the page
+# itself would allow: the nav list IS the outer gate, and the two must agree.
+work_pages = [
+    st.Page("pages/admin_all_orders.py", title="All Orders", icon="📊", default=True),
+    st.Page("pages/admin_process_order.py", title="Process Order", icon="🔧"),
+    st.Page("pages/admin_order_history.py", title="Order History", icon="📚"),
+]
+
 if is_admin(user):
-    admin_pages = [
-        st.Page("pages/admin_all_orders.py", title="All Orders", icon="📊", default=True),
-        st.Page("pages/admin_process_order.py", title="Process Order", icon="🔧"),
-        st.Page("pages/admin_order_history.py", title="Order History", icon="📚"),
-    ]
+    # Admin-only: these rebuild the Overview, create tabs, and decide who can
+    # log in.
     status_pages = [
         st.Page("pages/admin_projects.py", title="Projects", icon="🗂"),
         st.Page("pages/admin_user_management.py", title="User Management", icon="👥"),
@@ -92,7 +101,7 @@ if is_admin(user):
 # project tracker added as one extra group.
 if is_admin(user):
     pages = {
-        "Admin": admin_pages,
+        "Admin": work_pages,
         "Logistics": logistics_pages,
         "Orders": shared_pages,
         "Tracker": tracker_pages,
@@ -100,6 +109,7 @@ if is_admin(user):
     }
 elif is_logistics(user):
     pages = {
+        "Process": work_pages,
         "Logistics": logistics_pages,
         "Orders": shared_pages,
         "Tracker": tracker_pages,
@@ -107,6 +117,7 @@ elif is_logistics(user):
     }
 else:
     pages = {
+        "Process": work_pages,
         "Orders": shared_pages,
         "Tracker": tracker_pages,
         "Tools": tools_common,
@@ -121,12 +132,34 @@ with st.sidebar:
     role_badge = "🔑 Admin" if is_admin(user) else "📦 Logistics" if is_logistics(user) else "👤 Engineer"
     st.markdown(f"{role_badge} **{user['name']}**")
     st.caption(user["email"])
-    # `width="stretch"` in the original needs Streamlit >= 1.39; this works on
-    # both old and new versions.
-    if st.button("Logout", type="secondary", use_container_width=True):
-        del st.session_state["auth_email"]
-        del st.session_state["user"]
-        st.rerun()
+    # Logout has to tell the truth about WHERE the identity lives, because it
+    # is different in each mode — and the old unconditional
+    # `del st.session_state["auth_email"]` crashed the whole app the moment
+    # that key did not exist (it was only ever set by the name picker).
+    from config import IS_LOCAL
+
+    if IS_LOCAL:
+        # Local dev signs the configured admin in on every run; deleting the
+        # session just signs them straight back in. A button that pretends
+        # otherwise is worse than none. Real sign-in/out is exercised on the
+        # deployed-mode server (port 8503).
+        st.caption("Local development — signed in automatically. Logout "
+                   "exists on the deployed app, where sign-in is real.")
+    elif "auth_email" in st.session_state:
+        # Name login (the break-glass): the identity lives in this session,
+        # so ending the session genuinely logs out.
+        if st.button("Logout", type="secondary", use_container_width=True):
+            st.session_state.pop("auth_email", None)
+            st.session_state.pop("user", None)
+            st.rerun()
+    else:
+        # Verified sign-in: the identity arrives with every request from
+        # Streamlit / Cloudflare. The app cannot end that session — only the
+        # provider can — so say where, rather than offering a logout that
+        # would quietly not work.
+        st.caption("Signed in through your Google account. To switch person, "
+                   "sign out there — the app follows whatever the sign-in "
+                   "in front of it says.")
 
     st.markdown("---")
     from utils import parts_tracker, project_colors

@@ -152,8 +152,14 @@ def _prompt_name_login() -> str:
     return st.session_state.get("auth_email", "")
 
 
-def get_current_user() -> dict | None:
-    """{email, name, role} for the current person, or None."""
+def get_current_user(prompt: bool = True) -> dict | None:
+    """{email, name, role} for the current person, or None.
+
+    `prompt=False` only LOOKS — it never draws the name picker. The app shell
+    peeks first to decide whether to build the real navigation; drawing from
+    both the peek and the later `require_auth` put two identical pickers on
+    the page, which collides their widget ids and crashes the login screen.
+    """
     if IS_LOCAL:
         # Local development runs as whoever the installation names, falling
         # back to a generic identity so a fresh clone starts without any
@@ -165,7 +171,11 @@ def get_current_user() -> dict | None:
 
     email = verified_email()
     if not email and _name_login_allowed():
-        email = _prompt_name_login()
+        # A name picked on an earlier run lives in the session either way;
+        # only the widget itself is prompt-gated.
+        email = st.session_state.get("auth_email", "")
+        if not email and prompt:
+            email = _prompt_name_login()
     if not email:
         return None
 
@@ -187,6 +197,12 @@ def require_auth() -> dict:
         return user
 
     email = verified_email()
+    if not email and _name_login_allowed():
+        # The picker is already on screen (drawn by get_current_user just
+        # now) and nothing is chosen yet. The picker IS the message — an
+        # error underneath it would tell the person something is wrong when
+        # they simply have not answered yet.
+        st.stop()
     if email:
         st.error(
             "You are signed in as **%s**, but that address is not on the "
