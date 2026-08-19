@@ -162,7 +162,7 @@ TRACKER_NON_PART_TABS = {
     TAB_OVERVIEW, TAB_MOVEMENTS, "Legend & How To", "Location Summary",
     "By Holder", "Stock by Holder", TAB_ORDERS, "Users", "Messages",
     "Settings", "Projects", TAB_HOLDERS, TAB_STOCK, TAB_STOCK_HISTORY,
-    "Shipments", TAB_MOVEMENTS_MERGED,
+    "Shipments", TAB_MOVEMENTS_MERGED, "Order Drafts",
 }
 
 # BOM sheet tabs (the NPD "BOM&quote" workbook) — read-only, never written.

@@ -25,7 +25,9 @@ import streamlit.components.v1 as components
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from utils.auth import require_auth
-from utils import app_settings, bom_sheet, parts_model, parts_tracker, project_colors, project_registry
+from utils import (app_settings, bom_sheet, bulk_orders, order_drafts,
+                   parts_model, parts_tracker, project_colors,
+                   project_registry, tracker_orders)
 from utils.ui import project_scope, require_project, table_height
 
 # Reviewer is deliberately not collected here — deferred to a later phase. The
@@ -87,21 +89,105 @@ def _eta_str(value) -> str:
         return str(value).strip()
 
 
+# A draft LOADED on the previous run is applied here, before §1's widgets
+# exist — Streamlit refuses session-state writes to a widget key after the
+# widget has been drawn, so the hand-off has to land first.
+_pending = st.session_state.pop("ofb_pending_draft", None)
+if _pending:
+    st.session_state["ofb_units"] = _pending["units"]
+    st.session_state["ofb_build"] = _pending["build"]
+    st.session_state["ofb_seed"] = _pending["seed"]
+    st.session_state["ofb_loaded_draft"] = _pending["name"]
+    for _k in [k for k in st.session_state if str(k).startswith("ofb_grid_")]:
+        st.session_state.pop(_k, None)
+    st.session_state.pop("ofb_frames", None)
+    st.session_state.pop("ofb_nonce", None)
+
+# --- Drafts: the hand-off between whoever fills and whoever submits ---------
+# An engineer fills the selection and SAVES it; the PM loads it here, reviews
+# and submits (Hamid, 19 Aug). Drafts live on the main record's Order Drafts
+# tab — named, visible on the sheet, per project. Nothing about a draft is an
+# order: loading one only fills this page.
+_drafts = order_drafts.list_drafts(project)
+if st.session_state.get("ofb_loaded_draft"):
+    st.info("Working from draft **%s** — submitting will clear it."
+            % st.session_state["ofb_loaded_draft"])
+if _drafts:
+    with st.expander("📂 Load a saved draft (%d)" % len(_drafts)):
+        _names = sorted(_drafts)
+        _pick = st.selectbox(
+            "Draft", _names, key="ofb_draft_pick",
+            format_func=lambda n: "%s — %s, %s (%d part%s)" % (
+                n, _drafts[n]["saved_by"], _drafts[n]["saved_at"],
+                len(_drafts[n]["lines"]),
+                "" if len(_drafts[n]["lines"]) == 1 else "s"))
+        c_load, c_del = st.columns([1, 1])
+        if c_load.button("Open this draft", type="primary",
+                         key="ofb_draft_load"):
+            _d = _drafts[_pick]
+            _seed_rows = {}
+            for _r in bom_rows:
+                _seed_rows[str(parts_model.normalise_code(
+                    str(_r.get("mcode", "") or "")))] = {"include": False}
+            from datetime import datetime as _dt
+            for _l in _d["lines"]:
+                _entry = {"include": True}
+                if str(_l.get("qty", "")).strip().isdigit():
+                    _entry["Qty"] = int(_l["qty"])
+                if str(_l.get("recipient", "")).strip():
+                    _entry["Recipient"] = _l["recipient"].strip()
+                if str(_l.get("priority", "")).strip():
+                    _entry["Priority"] = _l["priority"].strip()
+                if str(_l.get("notes", "")).strip():
+                    _entry["Notes"] = _l["notes"].strip()
+                for _fmt in ("%d %b %Y", "%Y-%m-%d"):
+                    try:
+                        _entry["ETA"] = _dt.strptime(
+                            str(_l.get("eta", "")).strip(), _fmt).date()
+                        break
+                    except ValueError:
+                        continue
+                _seed_rows[str(_l["part"]).strip()] = _entry
+            try:
+                _units_val = max(1, int(str(_d.get("units") or "1")))
+            except ValueError:
+                _units_val = 1
+            st.session_state["ofb_pending_draft"] = {
+                "name": _pick, "units": _units_val,
+                "build": str(_d.get("build") or ""),
+                # The seed signature must match what §1 will compute for the
+                # loaded units (the draft never stores a default ETA).
+                "seed": {"sig": "%s_" % _units_val, "rows": _seed_rows}}
+            st.rerun()
+        if c_del.button("Delete this draft", key="ofb_draft_del"):
+            _why = order_drafts.delete_draft(project, _pick)
+            if _why:
+                st.error(_why)
+            else:
+                st.session_state.pop("ofb_loaded_draft", None)
+                st.rerun()
+
 # ============================================================
 # 1. How many
 # ============================================================
 st.subheader("1. How many")
 q1, q2, q3, q4 = st.columns([1, 1, 1, 2], vertical_alignment="bottom")
 with q1:
+    # Default read FROM session state: a loaded draft sets these keys before
+    # the widgets exist, and a hardcoded default alongside that write makes
+    # Streamlit warn about two sources of truth.
     units = st.number_input("Units to build", min_value=1, max_value=100000,
-                            value=1, step=1, key="ofb_units",
+                            value=st.session_state.get("ofb_units", 1),
+                            step=1, key="ofb_units",
                             help="How many finished assemblies this batch is for.")
 with q2:
     eta_date = st.date_input("ETA (optional)", value=None, key="ofb_eta",
                              help="Default ETA for every row — each part's "
                                   "ETA stays editable in the table.")
 with q3:
-    build_tag = st.text_input("Build (optional)", value="", key="ofb_build",
+    build_tag = st.text_input("Build (optional)",
+                              value=st.session_state.get("ofb_build", ""),
+                              key="ofb_build",
                               help="Batch tag stamped on every order line's "
                                    "Build column — e.g. T2.")
 with q4:
@@ -111,6 +197,16 @@ with q4:
 # Which parts already have a tab — an order for a part without one cannot be
 # filed against its history, so it is worth saying before the submit fails.
 have_tabs = set(parts_tracker.part_tabs(record_id))
+
+# Parts whose ledger already has an order ON ITS WAY are shown, not offered
+# (Hamid, 19 Aug: "once it is ordered ... should not be selected"). A second
+# raise for something already travelling is a double count — the exact thing
+# the audit spent a day undoing. Delivered and cancelled parts stay
+# selectable: a reorder is a new batch, not a duplicate.
+_status_of = {o["mcode"]: (o.get("derived") or "")
+              for o in tracker_orders.part_orders(record_id, project)}
+open_codes = {c for c, st_ in _status_of.items()
+              if st_ in ("ordered", "shipped")}
 
 rows = []
 for r in bom_rows:
@@ -154,6 +250,21 @@ if _seed and _seed.get("sig") == _base_sig:
 elif _seed:
     st.session_state.pop("ofb_seed", None)
 
+already_on_order = [r for r in rows if r["Part ID"] in open_codes]
+rows = [r for r in rows if r["Part ID"] not in open_codes]
+
+if already_on_order:
+    st.info("**%d part(s) already have an order on its way and are not "
+            "offered below.** They come back the moment their order is "
+            "delivered or cancelled." % len(already_on_order))
+    with st.expander("See which (%d)" % len(already_on_order)):
+        st.dataframe(pd.DataFrame([{
+            "Part ID": r["Part ID"], "Part Name": r["Part Name"],
+            "Status": _status_of.get(r["Part ID"], ""),
+        } for r in already_on_order]), hide_index=True,
+            use_container_width=True,
+            height=table_height(len(already_on_order)))
+
 types = sorted({r["Type"] for r in rows})
 missing_tabs = [r["Part ID"] for r in rows if not r["_has_tab"]]
 if missing_tabs:
@@ -168,6 +279,88 @@ if missing_tabs:
 # 2. Parts
 # ============================================================
 st.subheader("2. Parts")
+
+# The grid-state nonce and signature — defined BEFORE the quick-entry box
+# because its Apply click resets the grids through them. They used to sit
+# with the grid code below, and the first cut of quick entry hit a NameError
+# on the very click it existed for.
+if "ofb_nonce" not in st.session_state:
+    st.session_state["ofb_nonce"] = 0
+_signature = "%s_%s" % (_base_sig, st.session_state["ofb_nonce"])
+
+# Quick entry: one line per order, applied INTO the grids below — so the
+# review, the problem checks and the confirm tick stay the single path to a
+# submit whichever way the orders were typed. This is also the entry built
+# for working with an agent: forty checkbox clicks are hard to drive and
+# harder to audit; a pasted list is both.
+with st.expander("⚡ Quick entry — paste order lines instead of ticking"):
+    st.caption("One per line: `Part[, qty[, recipient[, ETA[, priority[, "
+               "notes]]]]]` — commas, pipes or tabs. Shorthand `M105 x120` "
+               "works. Blank fields keep the grid's defaults; `#` starts a "
+               "comment.")
+    # A FORM, deliberately: Streamlit only commits a text area on blur or
+    # Ctrl-Enter, so a plain button next to one fires with the text the
+    # server had BEFORE the click — the first cut applied an empty page and
+    # said nothing. A form submits the text and the click as one event.
+    with st.form("ofb_quick_form"):
+        quick_text = st.text_area(
+            "Order lines", key="ofb_quick",
+            placeholder="M105, 120, Ryan Wong, 25 Aug 2026" + chr(10) + "M213 x40",
+            label_visibility="collapsed", height=120)
+        replace_sel = st.checkbox(
+            "Untick everything else (the pasted lines become the whole "
+            "selection)", value=True, key="ofb_quick_replace")
+        quick_apply = st.form_submit_button("Apply to the tables below")
+if quick_apply:
+    # Known codes include the withheld open-order parts, so a line naming
+    # one gets the TRUE refusal ("already on its way"), not "not in this BOM".
+    parsed, errors = bulk_orders.parse_quick_lines(
+        quick_text,
+        [r["Part ID"] for r in rows]
+        + [r["Part ID"] for r in already_on_order],
+        open_codes, default_recipient=user["name"])
+    for e in errors:
+        st.error(e)
+    if not parsed and not errors:
+        st.info("Nothing to apply — the box is empty.")
+    if parsed:
+        seed_rows = {}
+        if replace_sel:
+            for r in rows:
+                seed_rows[str(r["Part ID"])] = {"include": False}
+        by_code_now = {r["Part ID"]: r for r in rows}
+        for q in parsed:
+            base = by_code_now[q["code"]]
+            entry = {"include": True,
+                     "Qty": q["qty"] if q["qty"] is not None
+                     else base["Qty"],
+                     "Recipient": q["recipient"] or base["Recipient"]}
+            if q["eta"] is not None:
+                entry["ETA"] = q["eta"]
+            if q["priority"]:
+                entry["Priority"] = q["priority"]
+            if q["notes"]:
+                entry["Notes"] = q["notes"]
+            seed_rows[str(q["code"])] = entry
+        # Reapply onto THIS run's rows (the grids render below us), and
+        # persist as the seed for later runs. No st.rerun: the first cut
+        # rebuilt the page and wiped its own error messages.
+        for row in rows:
+            stored = seed_rows.get(str(row["Part ID"]))
+            if stored:
+                for col, val in stored.items():
+                    row[col] = val
+        st.session_state["ofb_seed"] = {"sig": _base_sig,
+                                        "rows": seed_rows}
+        for type_name in types:
+            st.session_state.pop("ofb_grid_%s_%s"
+                                 % (type_name, _signature), None)
+        st.session_state.pop("ofb_frames", None)
+        st.session_state["ofb_nonce"] += 1
+        _signature = "%s_%s" % (_base_sig, st.session_state["ofb_nonce"])
+        st.success("Applied %d line(s) — review below, then submit."
+                   % len(parsed))
+
 st.caption("Recipient and Priority are per part — a batch can go to more than "
            "one person.")
 
@@ -272,9 +465,8 @@ COLUMN_CONFIG = {
 # click can force a rebuild that keeps the rows' edits. Streamlit keeps
 # widget state against the key, and without this the grid would keep showing
 # the values it was first drawn with.
-if "ofb_nonce" not in st.session_state:
-    st.session_state["ofb_nonce"] = 0
-_signature = "%s_%s" % (_base_sig, st.session_state["ofb_nonce"])
+# (nonce and _signature are initialised above the quick-entry box,
+# which needs them on its Apply click.)
 
 
 def _eta_cell(value):
@@ -425,6 +617,10 @@ bad_qty = [c["m_code"] for c in chosen if c["quantity"] < 1]
 if bad_qty:
     problems.append("Quantity must be at least 1: %s"
                     % ", ".join("`%s`" % c for c in bad_qty[:8]))
+now_open = [c["m_code"] for c in chosen if c["m_code"] in open_codes]
+if now_open:
+    problems.append("Already on order (raised since this page loaded?): %s"
+                    % ", ".join("`%s`" % c for c in now_open[:8]))
 no_tab = [c["m_code"] for c in chosen if not c["has_tab"]]
 if no_tab:
     problems.append("No part tab for: %s — build the record from the BOM first."
@@ -432,6 +628,33 @@ if no_tab:
 
 for p in problems:
     st.error(p)
+
+# Save the selection as a draft for someone ELSE to submit — the checks
+# above may still list problems; a draft is allowed to be unfinished, that
+# is what makes it a draft.
+d1, d2 = st.columns([2, 1.2], vertical_alignment="bottom")
+with d1:
+    draft_name = st.text_input(
+        "Save as draft (name)", key="ofb_draft_name",
+        value=st.session_state.get("ofb_loaded_draft", ""),
+        placeholder="e.g. T2 top-up — for PM review")
+with d2:
+    if st.button("💾 Save draft", key="ofb_draft_save",
+                 use_container_width=True):
+        _why = order_drafts.save_draft(
+            project, draft_name,
+            user.get("email", "") or user.get("name", ""),
+            units, build_tag.strip(),
+            [{"part": c["m_code"], "qty": c["quantity"],
+              "recipient": c["recipient"], "eta": c["eta"],
+              "priority": c["priority"], "notes": c["notes"]}
+             for c in chosen])
+        if _why:
+            st.error(_why)
+        else:
+            st.success("Draft **%s** saved — %d part(s). Anyone can load it "
+                       "from 📂 at the top of this page."
+                       % (draft_name.strip(), len(chosen)))
 
 confirmed = st.checkbox(
     "I have reviewed all %d order(s) — they will be filed to %s's record"
@@ -453,6 +676,10 @@ if st.button("📤 Submit %d order(s)" % len(chosen), type="primary",
         st.success("Recorded %d order(s) against their part tabs." % len(result["filed"]))
     for message in result["errors"]:
         st.error(message)
+    if result["orders"] and st.session_state.get("ofb_loaded_draft"):
+        _done = st.session_state.pop("ofb_loaded_draft")
+        if not order_drafts.delete_draft(project, _done):
+            st.info("Draft **%s** cleared — it became these orders." % _done)
     if result["orders"]:
         # Clear the editors, or they replay the old ticks over the next batch.
         for type_name in types:

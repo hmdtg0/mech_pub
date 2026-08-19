@@ -121,3 +121,98 @@ def submit(project: str, record_id: str, user: dict, rows: List[dict],
     if out["filed"]:
         parts_tracker.refresh(record_id)
     return out
+
+
+def parse_quick_lines(text, known_codes, open_codes, default_recipient=""):
+    """Order lines as text — the entry a person pastes and an agent types.
+
+    The grids are precise but slow to drive: forty checkboxes and cell edits
+    for what someone already has as a list (Hamid, 19 Aug: "agentic entry for
+    claude co-work, current one is difficult"). One line per order, fields
+    comma/pipe/tab-separated, only the part is required:
+
+        M105
+        M105 x120
+        M105, 120, Ryan Wong, 25 Aug 2026, urgent, note text...
+        # comments and blank lines are ignored
+
+    Returns (rows, errors): rows as {code, qty, recipient, eta, priority,
+    notes} with qty=None meaning "keep the grid's default", and errors as
+    human sentences. A part with an OPEN order is an error here for the same
+    reason it is unselectable in the grids — a second raise for something
+    already on its way is a double count, not an order.
+    """
+    import re
+    from datetime import datetime
+
+    known = {str(c).strip().lower(): str(c).strip() for c in known_codes}
+    open_low = {str(c).strip().lower() for c in open_codes}
+    rows, errors = [], []
+
+    def _eta(text_value):
+        value = str(text_value or "").strip()
+        if not value:
+            return None
+        for fmt in ("%d %b %Y", "%Y-%m-%d", "%d/%m/%Y", "%d %B %Y"):
+            try:
+                return datetime.strptime(value, fmt).date()
+            except ValueError:
+                continue
+        return "unreadable"
+
+    for n, raw in enumerate(str(text or "").splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # "M105 x120" / "M105 120" — the two-word shorthand.
+        parts = [p.strip() for p in re.split(r"[,|\t]", line)]
+        if len(parts) == 1:
+            m = re.match(r"^(\S+)\s+x?(\d+)$", line, re.I)
+            if m:
+                parts = [m.group(1), m.group(2)]
+        code = known.get(parts[0].lower())
+        if code is None:
+            errors.append("line %d: `%s` is not a part in this BOM."
+                          % (n, parts[0]))
+            continue
+        if parts[0].lower() in open_low:
+            errors.append("line %d: %s already has an order on its way — "
+                          "not selectable until it is delivered or cancelled."
+                          % (n, code))
+            continue
+        qty = None
+        if len(parts) > 1 and parts[1]:
+            digits = re.sub(r"^x", "", parts[1], flags=re.I)
+            if not digits.isdigit() or int(digits) < 1:
+                errors.append("line %d: quantity `%s` is not a whole number "
+                              "of at least 1." % (n, parts[1]))
+                continue
+            qty = int(digits)
+        eta = _eta(parts[3] if len(parts) > 3 else "")
+        if eta == "unreadable":
+            errors.append("line %d: could not read the date `%s` — use "
+                          "e.g. 25 Aug 2026 or 2026-08-25." % (n, parts[3]))
+            continue
+        priority = (parts[4].strip().upper() if len(parts) > 4 and
+                    parts[4].strip() else "")
+        if priority and priority not in ("URGENT", "NORMAL"):
+            errors.append("line %d: priority `%s` — use URGENT or Normal."
+                          % (n, parts[4]))
+            continue
+        rows.append({
+            "code": code,
+            "qty": qty,
+            "recipient": (parts[2].strip() if len(parts) > 2 and
+                          parts[2].strip() else default_recipient),
+            "eta": eta,
+            "priority": ("URGENT" if priority == "URGENT" else
+                         "Normal" if priority else None),
+            "notes": ", ".join(parts[5:]).strip() if len(parts) > 5 else "",
+        })
+    seen = set()
+    for r in rows:
+        if r["code"] in seen:
+            errors.append("%s appears more than once — one line per part."
+                          % r["code"])
+        seen.add(r["code"])
+    return rows, errors
