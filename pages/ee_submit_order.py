@@ -4,7 +4,8 @@ from datetime import datetime
 import streamlit as st
 
 from utils.auth import require_auth
-from utils import parts_tracker, project_colors, project_registry, tracker_writer
+from utils import (agent_entry, parts_tracker, project_colors,
+                   project_registry, tracker_writer)
 from utils.google_client import get_gspread_client
 from utils.orders_store import create_order
 from utils.drive_handler import upload_file
@@ -64,6 +65,22 @@ if part_prefill:
         if value and not reorder.get(key):
             reorder[key] = value
 
+# An Agent Entry paste prefills exactly like a reorder does — same dict, so
+# every field below stays a normal widget with a normal default and there is
+# no second way for a value to reach the form.
+agent_prefill = st.session_state.get("agent_prefill", {})
+if agent_prefill:
+    st.success("Filled from **Agent Entry** — check every field, then submit.")
+    if st.button("Clear the pasted values", key="clear_agent_prefill"):
+        st.session_state.pop("agent_prefill", None)
+        st.rerun()
+    reorder = dict(reorder)
+    reorder.update({k: v for k, v in agent_prefill.items() if v != ""})
+    _gaps = [f for f in agent_entry.REQUIRED if not reorder.get(f)]
+    if _gaps:
+        st.warning("Still needed before this can be submitted: %s."
+                   % ", ".join(g.replace("_", " ") for g in _gaps))
+
 previous_drive_link = reorder.get("drive_file_link", "").strip()
 default_manual_notes = _manual_notes_from_notes(reorder.get("notes", ""))
 
@@ -92,6 +109,67 @@ st.caption(
     "**BOM** (what can be ordered) — %s"
     % (project_registry.sheet_link(_active_sheets["tracker"]) or _not_linked,
        project_registry.sheet_link(_active_sheets["bom"]) or _not_linked))
+
+# The vocabulary already in use on the sheet, so locations and holders stay
+# consistent enough for the rollups to add up. Read once, here: the form's
+# dropdowns AND Agent Entry are checked against the same lists, so a pasted
+# order cannot name a holder the form itself would not offer.
+_known_locations, _known_holders = set(), set()
+for _row in parts_tracker.fetch_overview():
+    if _row.get("location"):
+        _known_locations.add(_row["location"])
+    if _row.get("holder"):
+        _known_holders.add(_row["holder"])
+_location_options = sorted(_known_locations) or ["UK office"]
+_default_from = ("UK office" if "UK office" in _location_options
+                 else _location_options[0])
+_holder_options = ["-- Select --"] + sorted(_known_holders)
+
+from utils.user_store import fetch_allowed_users
+all_users = fetch_allowed_users()
+reviewer_names = sorted({info["name"] for email, info in all_users.items()
+                         if info["name"] != user["name"]})
+reviewer_options = ["-- Select --"] + reviewer_names
+
+# Agent Entry — the whole order as text, for the same reason Order from BOM
+# has one: a form of sixteen controls is slow to drive and hard to audit,
+# while a pasted list is neither. It fills the form and stops; the review and
+# the Submit button below stay the only way an order is actually raised.
+with st.expander("🤖 Agent Entry — paste the whole order as fields"):
+    st.caption("One `field: value` per line — `part name`, `process`, "
+               "`m-code`, `version`, `material`, `finish`, `tolerances`, "
+               "`qty`, `priority`, `inspection`, `recipient`, `reviewer`, "
+               "`ordered from`, `holder`, `location`, `receipt note`, "
+               "`notes`. `#` starts a comment. Anything the form offers as a "
+               "dropdown is checked against it.")
+    # A FORM, deliberately: Streamlit commits a text area only on blur or
+    # Ctrl-Enter, so a plain button beside one fires with the text the server
+    # had BEFORE the click. A form submits the text and the click together.
+    with st.form("submit_agent_form"):
+        _agent_text = st.text_area(
+            "Order fields", key="submit_agent", label_visibility="collapsed",
+            height=200,
+            placeholder=chr(10).join([
+                "part name: EZ1 Housing revC", "process: CNC",
+                "m-code: M107", "version: 2.1.1", "material: Al 6061",
+                "qty: 120", "recipient: Send all to the UK office",
+                "reviewer: Ryan Wong"]))
+        _agent_apply = st.form_submit_button("Fill the form below")
+if _agent_apply:
+    _values, _errors, _missing = agent_entry.parse_fields(
+        _agent_text, processes=PROCESS_OPTIONS, reviewers=reviewer_names,
+        locations=_location_options, holders=sorted(_known_holders))
+    for _problem in _errors:
+        st.error(_problem)
+    if _errors:
+        # All or nothing: half a pasted order, silently, is worse than none.
+        # No rerun either — a rerun would wipe the errors off the screen.
+        st.info("Nothing was filled. Fix the lines above and paste again.")
+    elif not _values:
+        st.info("Nothing to fill — the box is empty.")
+    else:
+        st.session_state["agent_prefill"] = _values
+        st.rerun()
 
 # ============================================================
 # Part + Process
@@ -154,11 +232,6 @@ with col4:
     recipient = st.text_input("Recipient *", value=reorder.get("recipient", ""),
                               placeholder="e.g. Send all to the UK office")
 
-# Reviewer (second engineer)
-from utils.user_store import fetch_allowed_users
-all_users = fetch_allowed_users()
-reviewer_names = sorted({info["name"] for email, info in all_users.items() if info["name"] != user["name"]})
-reviewer_options = ["-- Select --"] + reviewer_names
 reviewer = st.selectbox("Reviewer (second engineer who can answer vendor questions) *", reviewer_options,
                         index=_option_index(reviewer_options, reorder.get("reviewer", "-- Select --")),
                         help="Pick a colleague who reviewed/will help review this design.")
@@ -172,18 +245,6 @@ st.caption("Submitting writes **two rows** to the part's tab: an origin row "
            "(who receives it, where it goes). Needs an M-code with a matching "
            "tab in the project's sheet.")
 
-# Offer the vocabulary already in use on the sheet, so locations and holders
-# stay consistent enough for the rollups to add up.
-_known_locations, _known_holders = set(), set()
-for _row in parts_tracker.fetch_overview():
-    if _row.get("location"):
-        _known_locations.add(_row["location"])
-    if _row.get("holder"):
-        _known_holders.add(_row["holder"])
-_location_options = sorted(_known_locations) or ["UK office"]
-_default_from = ("UK office" if "UK office" in _location_options
-                 else _location_options[0])
-
 tr1, tr2 = st.columns(2)
 with tr1:
     # Same control shape as the others, but locked: the origin holder is
@@ -191,17 +252,26 @@ with tr1:
     st.text_input("Ordered by", value=user["name"], disabled=True,
                   help="Taken from your account. The first holder on the part's "
                        "tab is whoever raises the order.")
-    ordered_from = st.selectbox("Ordered from", _location_options,
-                                index=_location_options.index(_default_from),
-                                help="Where the order originates — your location.")
+    ordered_from = st.selectbox(
+        "Ordered from", _location_options,
+        index=_option_index(_location_options,
+                            reorder.get("ordered_from", _default_from),
+                            _location_options.index(_default_from)),
+        help="Where the order originates — your location.")
 with tr2:
     recipient_holder = st.selectbox(
-        "Receiving holder", ["-- Select --"] + sorted(_known_holders),
+        "Receiving holder", _holder_options,
+        index=_option_index(_holder_options,
+                            reorder.get("recipient_holder", "-- Select --")),
         help="Who takes delivery. They become the part's current holder.")
-    recipient_location = st.selectbox("Receiving location", _location_options,
-                                      help="Where the parts are going.")
+    recipient_location = st.selectbox(
+        "Receiving location", _location_options,
+        index=_option_index(_location_options,
+                            reorder.get("recipient_location", "")),
+        help="Where the parts are going.")
 receipt_note = st.text_input(
-    "Receipt note", placeholder="e.g. shipped on 7/16 SF1572075868095",
+    "Receipt note", value=reorder.get("receipt_note", ""),
+    placeholder="e.g. shipped on 7/16 SF1572075868095",
     help="Goes on the second row. Left blank if you don't know yet.")
 
 # ============================================================

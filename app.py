@@ -84,6 +84,7 @@ logistics_pages = [
 # st.navigation does not register is unreachable no matter what the page
 # itself would allow: the nav list IS the outer gate, and the two must agree.
 work_pages = [
+    st.Page("pages/admin_overview.py", title="Overview", icon="🗂"),
     st.Page("pages/admin_all_orders.py", title="All Orders", icon="📊", default=True),
     st.Page("pages/admin_process_order.py", title="Process Order", icon="🔧"),
     st.Page("pages/admin_order_history.py", title="Order History", icon="📚"),

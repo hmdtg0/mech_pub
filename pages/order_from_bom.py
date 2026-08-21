@@ -25,8 +25,8 @@ import streamlit.components.v1 as components
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from utils.auth import require_auth
-from utils import (app_settings, bom_sheet, bulk_orders, order_drafts,
-                   parts_model, parts_tracker, project_colors,
+from utils import (agent_entry, app_settings, bom_sheet, bulk_orders,
+                   order_drafts, parts_model, parts_tracker, project_colors,
                    project_registry, tracker_orders)
 from utils.ui import project_scope, require_project, table_height
 
@@ -280,20 +280,20 @@ if missing_tabs:
 # ============================================================
 st.subheader("2. Parts")
 
-# The grid-state nonce and signature — defined BEFORE the quick-entry box
+# The grid-state nonce and signature — defined BEFORE the Agent Entry box
 # because its Apply click resets the grids through them. They used to sit
-# with the grid code below, and the first cut of quick entry hit a NameError
+# with the grid code below, and the first cut of Agent Entry hit a NameError
 # on the very click it existed for.
 if "ofb_nonce" not in st.session_state:
     st.session_state["ofb_nonce"] = 0
 _signature = "%s_%s" % (_base_sig, st.session_state["ofb_nonce"])
 
-# Quick entry: one line per order, applied INTO the grids below — so the
+# Agent Entry: one line per order, applied INTO the grids below — so the
 # review, the problem checks and the confirm tick stay the single path to a
 # submit whichever way the orders were typed. This is also the entry built
 # for working with an agent: forty checkbox clicks are hard to drive and
 # harder to audit; a pasted list is both.
-with st.expander("⚡ Quick entry — paste order lines instead of ticking"):
+with st.expander("🤖 Agent Entry — paste order lines instead of ticking"):
     st.caption("One per line: `Part[, qty[, recipient[, ETA[, priority[, "
                "notes]]]]]` — commas, pipes or tabs. Shorthand `M105 x120` "
                "works. Blank fields keep the grid's defaults; `#` starts a "
@@ -302,20 +302,20 @@ with st.expander("⚡ Quick entry — paste order lines instead of ticking"):
     # Ctrl-Enter, so a plain button next to one fires with the text the
     # server had BEFORE the click — the first cut applied an empty page and
     # said nothing. A form submits the text and the click as one event.
-    with st.form("ofb_quick_form"):
-        quick_text = st.text_area(
-            "Order lines", key="ofb_quick",
+    with st.form("ofb_agent_form"):
+        agent_text = st.text_area(
+            "Order lines", key="ofb_agent",
             placeholder="M105, 120, Ryan Wong, 25 Aug 2026" + chr(10) + "M213 x40",
             label_visibility="collapsed", height=120)
         replace_sel = st.checkbox(
             "Untick everything else (the pasted lines become the whole "
-            "selection)", value=True, key="ofb_quick_replace")
-        quick_apply = st.form_submit_button("Apply to the tables below")
-if quick_apply:
+            "selection)", value=True, key="ofb_agent_replace")
+        agent_apply = st.form_submit_button("Apply to the tables below")
+if agent_apply:
     # Known codes include the withheld open-order parts, so a line naming
     # one gets the TRUE refusal ("already on its way"), not "not in this BOM".
-    parsed, errors = bulk_orders.parse_quick_lines(
-        quick_text,
+    parsed, errors = agent_entry.parse_lines(
+        agent_text,
         [r["Part ID"] for r in rows]
         + [r["Part ID"] for r in already_on_order],
         open_codes, default_recipient=user["name"])
@@ -465,7 +465,7 @@ COLUMN_CONFIG = {
 # click can force a rebuild that keeps the rows' edits. Streamlit keeps
 # widget state against the key, and without this the grid would keep showing
 # the values it was first drawn with.
-# (nonce and _signature are initialised above the quick-entry box,
+# (nonce and _signature are initialised above the Agent Entry box,
 # which needs them on its Apply click.)
 
 
