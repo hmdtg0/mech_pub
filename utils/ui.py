@@ -118,49 +118,40 @@ def render_movement(row: dict, notes: bool = True) -> None:
 
 
 def project_scope(purpose: str, key: str = "page_project") -> str:
-    """Say — changeably — which project this page WRITES to.
+    """State — not offer — which project this page writes to.
 
     The sidebar switcher is global but easy to miss at the exact moment it
     matters: a mass submit. "Which record did that just go to" is the wrong
     question to be asking after the fact (Hamid, 19 Aug), so a page that
-    files orders states its target where the orders are, with the switch in
-    arm's reach. One truth underneath — this and the sidebar move the same
-    session state.
+    files orders says its target where the orders are. It used to carry a
+    selectbox too; that went with every other per-page picker on 21 Aug —
+    one control, in the sidebar, and this line reports what it says.
     """
     import streamlit as st
 
     from utils import project_colors, project_registry
 
     active, _sheet = project_registry.active()
-    names = list(project_registry.all_projects())
-    if not names:
+    if not project_registry.all_projects():
         return active
-    c1, c2 = st.columns([1.6, 3.4], vertical_alignment="center")
-    with c1:
-        picked = st.selectbox(
-            "Project", names,
-            index=names.index(active) if active in names else 0, key=key)
-    with c2:
-        st.markdown(project_colors.badge_html(picked), unsafe_allow_html=True)
-        st.caption(purpose)
-    if picked != active:
-        project_registry.set_active(picked)
-        # Keep the sidebar switcher agreeing, or its stale widget state
-        # flips the project straight back on the next rerun.
-        st.session_state["sidebar_project"] = picked
-        st.rerun()
-    return picked
+    st.markdown(project_colors.badge_html(active), unsafe_allow_html=True)
+    st.caption("%s Change it in the sidebar." % purpose)
+    return active
 
 
-def project_filter(rows, key: str, fields=("project", "Project")):
-    """A cross-project listing, narrowed to one project by selectbox.
+def in_scope(rows, fields=("project", "Project")):
+    """A cross-project listing, narrowed to whatever the sidebar is showing.
 
-    Rendered even while a single project is live: the control tells the
-    reader this listing spans projects, and the day a second project lands
-    it already works (Hamid, 19 Aug — pages that show every project need a
-    filter).
+    This used to be a selectbox on each page. Five pages meant five controls
+    answering the same question, and the sidebar answering it a sixth time
+    (Hamid, 21 Aug: "when it is set all pages should follow it, this will
+    help removing the project picker from each page"). The scope lives in one
+    place now; a listing just filters by it.
     """
-    import streamlit as st
+    from utils import project_registry
+
+    if project_registry.is_all():
+        return list(rows)
 
     def _of(row):
         for f in fields:
@@ -169,10 +160,37 @@ def project_filter(rows, key: str, fields=("project", "Project")):
                 return value
         return ""
 
-    names = sorted({_of(r) for r in rows if _of(r)})
-    if not names:
-        return rows
-    picked = st.selectbox("Project", ["all projects"] + names, key=key)
-    if picked == "all projects":
-        return rows
-    return [r for r in rows if _of(r) == picked]
+    wanted = project_registry.active()[0]
+    # A row with no project named belongs to whoever is looking: it came from
+    # a source that only ever holds one project's data.
+    return [r for r in rows if _of(r) in ("", wanted)]
+
+
+def require_single_project(purpose: str = "This page"):
+    """Stop a page that needs ONE project while the scope is every project.
+
+    A modal rather than a line of text, and a modal with the picker IN it:
+    the answer to "select a project to continue" is a project, so asking the
+    question and sending the reader to the sidebar for the answer is one trip
+    too many (Hamid, 21 Aug).
+    """
+    import streamlit as st
+
+    from utils import project_registry
+
+    require_project()
+    if not project_registry.is_all():
+        return project_registry.active()[0]
+
+    @st.dialog("Select a project to continue")
+    def _ask():
+        st.write("%s writes to — or reads — one project record, so it needs "
+                 "to know which one." % purpose)
+        names = list(project_registry.all_projects())
+        picked = st.selectbox("Project", names, key="dialog_project")
+        if st.button("Continue", type="primary", use_container_width=True):
+            project_registry.set_scope(picked)
+            st.rerun()
+
+    _ask()
+    st.stop()

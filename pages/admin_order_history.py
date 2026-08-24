@@ -24,9 +24,9 @@ st.caption("Delivered and cancelled orders")
 # origin row ordered.
 from utils import ui as _ui
 
-_tracker_done = _ui.project_filter(
+_tracker_done = _ui.in_scope(
     [o for o in tracker_orders.all_projects_orders()
-     if tracker_orders.is_complete(o)], key="hist_project")
+     if tracker_orders.is_complete(o)])
 
 st.markdown("### From the project trackers — completed (%d)" % len(_tracker_done))
 tracker_order_ui.render_section(

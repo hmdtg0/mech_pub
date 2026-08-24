@@ -42,7 +42,7 @@ if not rows:
     st.info("No project records are registered yet — add one on **Projects**.")
     st.stop()
 
-rows = ui.project_filter(rows, key="overview_project")
+rows = ui.in_scope(rows)
 
 f1, f2 = st.columns(2)
 with f1:

@@ -45,18 +45,25 @@ with c2:
         holders_store.refresh()
         st.rerun()
 
-st.markdown("**Project** — %s" % project_colors.badge_html(active_name),
+_all_scope = project_registry.is_all()
+st.markdown("**Project** — %s"
+            % ("every registered project" if _all_scope
+               else project_colors.badge_html(active_name)),
             unsafe_allow_html=True)
 
 
 def _mine(row):
-    return stock_store.project_matches(row.get("project", ""), active_name)
+    # The Stock tab is central and carries a project per row, so the
+    # widest scope is simply no filter at all.
+    return _all_scope or stock_store.project_matches(
+        row.get("project", ""), active_name)
 
 
 all_rows = [r for r in stock_store.fetch_stock() if _mine(r)]
 parted = [r for r in all_rows if r.get("part_id")]
 totals_only = [r for r in all_rows if not r.get("part_id")]
-history = [h for h in stock_store.fetch_history(active_name) if _mine(h)]
+history = [h for h in stock_store.fetch_history(
+    "" if _all_scope else active_name) if _mine(h)]
 holders = holders_store.fetch_holders()
 
 sheet_total = sum(to_int(r.get("qty", "")) for r in all_rows)

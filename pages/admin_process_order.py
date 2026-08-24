@@ -56,7 +56,7 @@ if not orders:
 
 # The worklist spans every project (writes are safe either way — each order
 # is filed to ITS OWN project's record, resolved per order below).
-orders = ui.project_filter(orders, key="po_project")
+orders = ui.in_scope(orders)
 _multi_project = len({(o.get("Project") or "").strip() for o in orders
                       if (o.get("Project") or "").strip()}) > 1
 

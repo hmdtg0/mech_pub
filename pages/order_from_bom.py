@@ -28,7 +28,7 @@ from utils.auth import require_auth
 from utils import (agent_entry, app_settings, bom_sheet, bulk_orders,
                    order_drafts, parts_model, parts_tracker, project_colors,
                    project_registry, tracker_orders)
-from utils.ui import project_scope, require_project, table_height
+from utils.ui import project_scope, require_single_project, table_height
 
 # Reviewer is deliberately not collected here — deferred to a later phase. The
 # Orders row keeps its Reviewer column and takes it blank.
@@ -36,7 +36,7 @@ from utils.ui import project_scope, require_project, table_height
 user = require_auth()
 
 st.title("🧾 Order from BOM")
-require_project()
+require_single_project("Order from BOM")
 
 project, record_id = project_registry.active()
 bom_id = project_registry.bom_sheet(project)

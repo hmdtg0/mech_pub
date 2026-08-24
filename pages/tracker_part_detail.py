@@ -15,14 +15,14 @@ from utils import (bom_sheet, holders_store, parts_model, parts_tracker,
 from utils.orders_store import fetch_orders_for_part
 from utils.tracker_parse import (is_selected, order_origin, order_recipient,
                                  to_int)
-from utils.ui import (movement_header, render_movement, require_project,
+from utils.ui import (movement_header, render_movement, require_single_project,
                       table_height)
 
 user = require_auth()
 
 st.title("🔍 Part Detail")
 
-require_project()
+require_single_project("Part Detail")
 
 # Which project's tracker this part comes from — M-codes are only unique
 # within a project, so the page never shows a part without naming it.

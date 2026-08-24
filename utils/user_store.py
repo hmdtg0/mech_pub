@@ -31,8 +31,9 @@ FALLBACK_ADMIN = {"email": PRIMARY_ADMIN_EMAIL, "name": PRIMARY_ADMIN_NAME,
 
 def _create_users_ws(ss: gspread.Spreadsheet) -> gspread.Worksheet:
     """Create the Users worksheet (auto-create when missing)."""
-    ws = ss.add_worksheet(title=TAB_USERS, rows=50, cols=3)
-    ws.update(values=[["Email", "Name", "Role"]], range_name="A1:C1")
+    ws = ss.add_worksheet(title=TAB_USERS, rows=50, cols=4)
+    ws.update(values=[["Email", "Name", "Role", "Pinned project"]],
+              range_name="A1:D1")
     # Seed the first admin, if the installation names one.
     if FALLBACK_ADMIN["email"]:
         ws.update(values=[[FALLBACK_ADMIN["email"], FALLBACK_ADMIN["name"],
@@ -53,7 +54,8 @@ def _load_users() -> dict:
             if not FALLBACK_ADMIN["email"]:
                 return {}
             return {FALLBACK_ADMIN["email"]: {"name": FALLBACK_ADMIN["name"],
-                                              "role": FALLBACK_ADMIN["role"]}}
+                                              "role": FALLBACK_ADMIN["role"],
+                                              "pinned": ""}}
 
         users = {}
         for row in all_values[1:]:  # Skip header
@@ -63,15 +65,23 @@ def _load_users() -> dict:
                 role = row[2].strip().lower()
                 if role not in ("admin", "engineer", "logistics"):
                     role = "engineer"
-                users[email] = {"name": name, "role": role}
+                # Column D is the project this person lands on. Read with a
+                # length check, not an index: every Users tab written before
+                # 21 Aug has three columns and must keep working untouched.
+                pinned = row[3].strip() if len(row) >= 4 else ""
+                users[email] = {"name": name, "role": role, "pinned": pinned}
 
         # Always ensure fallback admin exists
         if FALLBACK_ADMIN["email"] not in users:
-            users[FALLBACK_ADMIN["email"]] = {"name": FALLBACK_ADMIN["name"], "role": FALLBACK_ADMIN["role"]}
+            users[FALLBACK_ADMIN["email"]] = {"name": FALLBACK_ADMIN["name"],
+                                              "role": FALLBACK_ADMIN["role"],
+                                              "pinned": ""}
 
         return users
     except Exception:
-        return {FALLBACK_ADMIN["email"]: {"name": FALLBACK_ADMIN["name"], "role": FALLBACK_ADMIN["role"]}}
+        return {FALLBACK_ADMIN["email"]: {"name": FALLBACK_ADMIN["name"],
+                                          "role": FALLBACK_ADMIN["role"],
+                                          "pinned": ""}}
 
 
 def fetch_allowed_users() -> dict:
@@ -152,3 +162,44 @@ def update_user_role(client: gspread.Client, email: str, new_role: str):
         raise ValueError(f"User {email} not found")
 
     _on_users_ws(_do)
+
+
+def pinned_project(email: str) -> str:
+    """The project this person lands on, or "" for the app's own default."""
+    return fetch_allowed_users().get(str(email or "").lower().strip(),
+                                     {}).get("pinned", "")
+
+
+def set_pinned_project(email: str, project: str) -> str:
+    """Pin (or unpin, with "") this person's landing project.
+
+    Their own row, their own cell — no other user's line is touched, and the
+    write happens on the pin click rather than on every project switch, which
+    would put a sheet write behind an ordinary UI control.
+
+    Returns "" on success, or a sentence saying why not.
+    """
+    from utils.auth import impersonation_block
+    blocked = impersonation_block()
+    if blocked:
+        return blocked
+    target = str(email or "").lower().strip()
+    if not target:
+        return "No account to pin against."
+
+    def _do(ws: gspread.Worksheet):
+        values = ws.get_all_values()
+        header = [h.strip().lower() for h in (values[0] if values else [])]
+        if "pinned project" not in header:
+            ws.update_cell(1, 4, "Pinned project")
+        for row_idx, row in enumerate(values[1:], start=2):
+            if row and row[0].strip().lower() == target:
+                ws.update_cell(row_idx, 4, str(project or "").strip())
+                _clear_cache()
+                return ""
+        return "%s is not on the Users tab." % email
+
+    try:
+        return _on_users_ws(_do) or ""
+    except Exception as exc:
+        return "Could not save the pin: %s" % exc

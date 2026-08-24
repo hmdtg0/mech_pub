@@ -214,8 +214,7 @@ st.caption("Delivered/cancelled orders are moved to **Order History** — see si
 # --- Open orders recorded on the project trackers ---------------------------
 # On the sheet an order is a pair of rows (origin + receipt); it counts as open
 # until the receipt row has taken delivery of everything ordered.
-_tracker_all = ui.project_filter(tracker_orders.all_projects_orders(),
-                                 key="ao_project")
+_tracker_all = ui.in_scope(tracker_orders.all_projects_orders())
 _tracker_open = [o for o in _tracker_all if not tracker_orders.is_complete(o)]
 
 st.markdown("### From the project trackers — open (%d of %d)"
@@ -245,9 +244,11 @@ for col, status in zip([col_m1, col_m2, col_m3, col_m4, col_m5], ORDER_STATUSES)
 st.markdown("---")
 
 # --- Filters ---
-# Orders are central (one tab, every project) — Project is a filter here,
-# not a sheet switch.
-col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+# Orders are central (one tab, every project), so this table is narrowed
+# by the sidebar scope like every other listing — it used to carry its
+# own Project selectbox, the second on this page.
+orders = ui.in_scope(orders)
+col_f1, col_f2, col_f3 = st.columns(3)
 with col_f1:
     status_filter = st.selectbox("Status", ["all"] + ORDER_STATUSES, index=0)
 with col_f2:
@@ -255,10 +256,6 @@ with col_f2:
 with col_f3:
     engineers = sorted(set(o.get("EngineerName", "") for o in orders if o.get("EngineerName")))
     engineer_filter = st.selectbox("Engineer", ["all"] + engineers)
-with col_f4:
-    order_projects = sorted(set(o.get("Project", "").strip() for o in orders
-                                if o.get("Project", "").strip()))
-    project_filter = st.selectbox("Project", ["all"] + order_projects)
 
 # Filter
 filtered = orders
@@ -268,8 +265,6 @@ if priority_filter != "all":
     filtered = [o for o in filtered if o.get("Priority") == priority_filter]
 if engineer_filter != "all":
     filtered = [o for o in filtered if o.get("EngineerName") == engineer_filter]
-if project_filter != "all":
-    filtered = [o for o in filtered if o.get("Project", "").strip() == project_filter]
 
 # Sort: URGENT first, then newest first within same priority
 urgent = [o for o in filtered if o.get("Priority") == "URGENT"]

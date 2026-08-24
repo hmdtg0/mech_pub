@@ -84,8 +84,10 @@ logistics_pages = [
 # st.navigation does not register is unreachable no matter what the page
 # itself would allow: the nav list IS the outer gate, and the two must agree.
 work_pages = [
-    st.Page("pages/admin_overview.py", title="Overview", icon="🗂"),
-    st.Page("pages/admin_all_orders.py", title="All Orders", icon="📊", default=True),
+    # Overview is the landing page: the one screen that answers "where does
+    # everything stand" (Hamid, 21 Aug).
+    st.Page("pages/admin_overview.py", title="Overview", icon="🗂", default=True),
+    st.Page("pages/admin_all_orders.py", title="All Orders", icon="📊"),
     st.Page("pages/admin_process_order.py", title="Process Order", icon="🔧"),
     st.Page("pages/admin_order_history.py", title="Order History", icon="📚"),
 ]
@@ -148,6 +150,12 @@ st.markdown("""<style>
 [data-testid="stSidebarHeader"] { order: 0; }
 [data-testid="stSidebarUserContent"] { order: 1; }
 [data-testid="stSidebarNav"] { order: 2; }
+/* And tight, because every pixel it takes is a pixel of page list pushed
+   down. Streamlit's default 1rem gap between sidebar elements is generous
+   for a form and wasteful for three controls. */
+[data-testid="stSidebarUserContent"] { padding: 0.5rem 1rem 0.25rem; }
+[data-testid="stSidebarUserContent"] [data-testid="stVerticalBlock"] { gap: 0.3rem; }
+[data-testid="stSidebarUserContent"] [data-testid="stWidgetLabel"] p { font-size: 0.8rem; }
 </style>""", unsafe_allow_html=True)
 
 # The custom sidebar block, CSS-lifted above the page list (see the style
@@ -158,43 +166,25 @@ st.markdown("""<style>
 # (21 Aug: "its okay to keep them together").
 with st.sidebar:
     from config import IS_LOCAL
-    from utils import parts_tracker, project_colors
+    from utils import parts_tracker, user_store
     from utils.google_client import credentials_status
 
-    # ONE project switcher for the whole app. It used to be repeated on five
-    # pages, each with its own state: switching project on Parts also silently
-    # redirected your next order, because they all wrote the same session key
-    # from different places. Chosen once here, every page follows.
-    _names = list(project_registry.all_projects())
-    if _names:
-        _picked = st.selectbox(
-            "Project", _names,
-            index=_names.index(_current_project) if _current_project in _names else 0,
-            key="sidebar_project",
-            help="Every page reads this project. Parts can still show all "
-                 "projects at once as a filter.")
-        if _picked != _current_project:
-            project_registry.set_active(_picked)
-            st.rerun()
-        st.markdown(project_colors.badge_html(_picked,
-                                              sheet_id=project_registry.tracker_sheet(_picked)),
-                    unsafe_allow_html=True)
-    elif project_registry.source_is_live():
-        st.caption("No projects registered yet.")
-    else:
-        st.caption("⚠️ Can't read the project list from the main record.")
-    # No read stamp here: the sidebar renders before the page loads its data,
-    # so it would always show the previous read. The page's own project line
-    # carries the stamp.
-    st.caption(f"Data: {parts_tracker.source_label(with_read=False)}")
-    _cred_err = credentials_status()
-    if _cred_err:
-        st.caption(f"⚠️ Read-only — no Google credentials ({_cred_err})")
-
-    st.markdown("---")
-    role_badge = "🔑 Admin" if is_admin(user) else "📦 Logistics" if is_logistics(user) else "👤 Engineer"
-    st.markdown(f"{role_badge} **{user['name']}**")
-    st.caption(user["email"])
+    # Who you are, in one line, above the project switch: role, name, email.
+    # st.html rather than st.caption, because Streamlit's markdown turns any
+    # bare address into a mailto link and a mail client is no use to anyone
+    # reading their own address (Hamid, 21 Aug). The sentence explaining
+    # where sign-in lives is the line's tooltip.
+    _role = ("🔑 Admin" if is_admin(user) else
+             "📦 Logistics" if is_logistics(user) else "👤 Engineer")
+    st.html(
+        '<div title="%s" style="font-size:0.78rem;color:rgba(49,51,63,0.7);'
+        'line-height:1.3;margin:0 0 0.25rem 0;">%s <span style="opacity:.5">|'
+        '</span> %s <span style="opacity:.5">|</span> %s</div>'
+        % ("Signed in automatically in local development." if IS_LOCAL else
+           "Signed in through your Google account. To switch person, sign "
+           "out there — the app follows whatever the sign-in in front of it "
+           "says.",
+           _role, user["name"], user["email"]))
 
     # --- View as: see the app as a teammate does (admins only) --------------
     # The PCB tool answered this need by letting anyone LOG IN as anyone —
@@ -232,34 +222,97 @@ with st.sidebar:
                 st.session_state.pop("view_as", None)
                 st.session_state.pop("view_as_real", None)
             st.rerun()
+
+    # ONE project switcher for the whole app. It used to be repeated on five
+    # pages, each with its own state: switching project on Parts also silently
+    # redirected your next order, because they all wrote the same session key
+    # from different places. Chosen once here, every page follows.
+    #
+    # One row, and everything that used to sit under it is folded into that
+    # row (Hamid, 21 Aug: "keep project in single row... shrink it as much as
+    # the tool allows"). The badge went because it repeated the name already
+    # showing in the box; the label went because a list of project names does
+    # not need telling; the data-source line went into the help tooltip,
+    # where it is still one hover away. It sits last of the three, with a gap
+    # above it: who you are, who you are looking as, then what you are
+    # looking at.
+    st.html('<div style="height:0.55rem"></div>')
+    _names = list(project_registry.all_projects())
+    _source = parts_tracker.source_label(with_read=False)
+    if _names:
+        # First landing of a session goes to this person's pinned project, so
+        # the app opens where they work rather than on whichever project the
+        # Projects tab happens to list first.
+        if "project_scope" not in st.session_state:
+            _pin = user_store.pinned_project(user.get("email", ""))
+            st.session_state["project_scope"] = ""
+            if _pin == project_registry.ALL and len(_names) > 1:
+                st.session_state["project_scope"] = project_registry.ALL
+            elif _pin in _names:
+                project_registry.set_active(_pin)
+
+        _options = ([project_registry.ALL] + _names if len(_names) > 1
+                    else list(_names))
+        _now = project_registry.scope()
+        _pick_col, _link_col, _pin_col = st.columns(
+            [3, 1.1, 0.6], vertical_alignment="center")
+        with _pick_col:
+            _picked = st.selectbox(
+                "Project", _options,
+                index=_options.index(_now) if _now in _options else 0,
+                key="sidebar_project", label_visibility="collapsed",
+                help="What every page shows. \"%s\" widens the listings; the "
+                     "pages that write to one record ask you to choose. "
+                     "Data: %s." % (project_registry.ALL, _source))
+        if _picked != _now:
+            project_registry.set_scope(_picked)
+            st.rerun()
+        with _link_col:
+            _sheet = ("" if _picked == project_registry.ALL else
+                      project_registry.sheet_link(
+                          project_registry.tracker_sheet(_picked), "sheet ↗"))
+            if _sheet:
+                st.markdown(_sheet, unsafe_allow_html=True)
+        with _pin_col:
+            # One cell on your own row of the Users tab, written on the click
+            # — not on every project switch, which would put a sheet write
+            # behind an ordinary control.
+            _pinned_now = user_store.pinned_project(user.get("email", ""))
+            _is_pinned = _pinned_now == _picked
+            if st.button("📌" if _is_pinned else "📍", key="pin_project",
+                         help=("Pinned — you land here. Click to unpin."
+                               if _is_pinned else
+                               "Land on %s when you next open the app."
+                               % _picked)):
+                _problem = user_store.set_pinned_project(
+                    user.get("email", ""), "" if _is_pinned else _picked)
+                if _problem:
+                    st.warning(_problem)
+                else:
+                    st.rerun()
+    elif project_registry.source_is_live():
+        st.caption("No projects registered yet.")
+    else:
+        st.caption("⚠️ Can't read the project list from the main record.")
+    _cred_err = credentials_status()
+    if _cred_err:
+        st.caption(f"⚠️ Read-only — no Google credentials ({_cred_err})")
+
+
     if impersonation():
         st.warning("Viewing as **%s** — writes are disabled. You are %s."
                    % (user["name"], impersonation().get("email", "?")))
-    # Logout has to tell the truth about WHERE the identity lives, because it
-    # is different in each mode — and the old unconditional
-    # `del st.session_state["auth_email"]` crashed the whole app the moment
-    # that key did not exist (it was only ever set by the name picker).
-    if IS_LOCAL:
-        # Local dev signs the configured admin in on every run; deleting the
-        # session just signs them straight back in. A button that pretends
-        # otherwise is worse than none. Real sign-in/out is exercised on the
-        # deployed-mode server (port 8503).
-        st.caption("Local development — signed in automatically. Logout "
-                   "exists on the deployed app, where sign-in is real.")
-    elif "auth_email" in st.session_state:
-        # Name login (the break-glass): the identity lives in this session,
-        # so ending the session genuinely logs out.
+    # A Logout button only exists where logging out is a real thing the app
+    # can do: name login keeps the identity in this session, so ending the
+    # session ends it. Local dev signs you straight back in, and a verified
+    # Google session can only be ended at Google — in both of those the
+    # button would be a lie, so the email's tooltip says where sign-in lives
+    # instead. (The old unconditional `del st.session_state["auth_email"]`
+    # crashed the app whenever that key had never been set.)
+    if not IS_LOCAL and "auth_email" in st.session_state:
         if st.button("Logout", type="secondary", use_container_width=True):
             st.session_state.pop("auth_email", None)
             st.session_state.pop("user", None)
             st.rerun()
-    else:
-        # Verified sign-in: the identity arrives with every request from
-        # Streamlit / Cloudflare. The app cannot end that session — only the
-        # provider can — so say where, rather than offering a logout that
-        # would quietly not work.
-        st.caption("Signed in through your Google account. To switch person, "
-                   "sign out there — the app follows whatever the sign-in "
-                   "in front of it says.")
 
 pg.run()

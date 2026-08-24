@@ -33,14 +33,9 @@ active_name, _ = project_registry.active()
 # Labels stay short so none of them wrap to a second line — a wrapped label
 # pushes its input down and the whole row stops lining up. The button sits on
 # the same baseline via vertical_alignment rather than a spacer.
-c1, c2, c3, c4 = st.columns([3, 1.5, 1.5, 1.3], vertical_alignment="bottom")
+c1, c3, c4 = st.columns([4, 1.5, 1.3], vertical_alignment="bottom")
 with c1:
     query = st.text_input("🔍 Search", placeholder="M-code, part, project, holder, note…")
-with c2:
-    show_all = (st.checkbox("All projects", key="parts_all_projects",
-                            help="Show every registered project's parts at "
-                                 "once. Leaves the sidebar's project alone.")
-                if len(projects) > 1 else False)
 with c3:
     category_box = st.empty()  # filled once the parts are loaded
 with c4:
@@ -49,7 +44,10 @@ with c4:
             parts_tracker.refresh(_sid)
         st.rerun()
 
-picked = ALL_PROJECTS if show_all else active_name
+# The scope is the sidebar's, not this page's: the "All projects" checkbox
+# that used to live up there answered the same question the sidebar now
+# answers for every page (Hamid, 21 Aug).
+picked = ALL_PROJECTS if project_registry.is_all() else active_name
 
 # Which sheets this page reads: one project, or every registered project.
 registry = project_registry.all_projects()

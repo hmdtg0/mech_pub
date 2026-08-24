@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.auth import require_auth
 from utils.google_client import get_gspread_client
 from utils.orders_store import fetch_all_orders, update_order
-from utils import parts_model, parts_tracker, project_colors, project_registry
+from utils import (parts_model, parts_tracker, project_colors,
+                   project_registry, ui)
 from utils.tracker_parse import to_int
 
 user = require_auth()
@@ -25,13 +26,18 @@ user = require_auth()
 st.title("📦 Logistics Dashboard")
 st.markdown(f"Welcome, **{user['name']}**")
 _active_name, _ = project_registry.active()
-st.caption("Order queues below span **every project** (rows are tagged when "
-           "more than one is live). *Recent Movements* and *Parts Short* "
-           "follow the sidebar's project — currently **%s**." % _active_name)
+_wide = project_registry.is_all()
+_sources = (list(project_registry.all_projects().items()) if _wide
+            else [(_active_name, "")])
+st.caption("Everything here follows the sidebar — currently **%s**. The order "
+           "queues are one central tab (rows are tagged when more than one "
+           "project is live); *Parts Short* and *Recent Movements* live in "
+           "each project's own record, so they are listed project by "
+           "project." % ("every project" if _wide else _active_name))
 
 client = get_gspread_client()
 # Orders are central: one tab for every project, each row tagged Project.
-orders = fetch_all_orders()
+orders = ui.in_scope(fetch_all_orders())
 _multi_project = len({(o.get("Project") or "").strip() for o in orders
                       if (o.get("Project") or "").strip()}) > 1
 
@@ -52,10 +58,18 @@ in_transit = [o for o in orders
 recently_delivered = [o for o in orders if o.get("Status") == "delivered"]
 
 # --- Tracker categories (read-only) ---
-overview = parts_tracker.fetch_overview()
-open_deliveries = [r for r in overview
-                   if to_int(r.get("qty_ordered", "")) > to_int(r.get("qty_received", ""))]
-movements = parts_tracker.fetch_movements()
+# One project record per source, read in turn: these two tabs belong to a
+# project's own sheet, so the wide scope is a list of blocks rather than one
+# merged table (Hamid, 21 Aug: "show them in the same page one after another").
+_short_by_project, _moves_by_project = [], []
+for _pname, _psid in _sources:
+    _rows = parts_tracker.fetch_overview(_psid or None)
+    _short_by_project.append(
+        (_pname, [r for r in _rows
+                  if to_int(r.get("qty_ordered", "")) > to_int(r.get("qty_received", ""))]))
+    _moves_by_project.append((_pname, parts_tracker.fetch_movements(_psid or None)))
+open_deliveries = [r for _n, rows in _short_by_project for r in rows]
+movements = [m for _n, rows in _moves_by_project for m in rows]
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Awaiting Dispatch", len(awaiting_dispatch))
@@ -158,14 +172,17 @@ with st.expander(f"🔄 **Parts Short — project tracker** ({len(open_deliverie
     else:
         st.caption("Parts where the tracker's received quantity is below the ordered "
                    "quantity. Maintained in the project's Sheet — read-only here.")
-        for r in open_deliveries[:20]:
-            ordered = to_int(r.get("qty_ordered", ""))
-            received = to_int(r.get("qty_received", ""))
-            st.markdown("**%s** — %s | short %d of %d | → %s | held by %s"
-                        % (r.get("mcode", "?"), r.get("part_name", ""),
-                           ordered - received, ordered,
-                           r.get("location") or "location TBC",
-                           r.get("holder") or "unassigned"))
+        for _pname, _rows in _short_by_project:
+            if _wide:
+                st.markdown("**%s** — %d" % (_pname, len(_rows)))
+            for r in _rows[:20]:
+                ordered = to_int(r.get("qty_ordered", ""))
+                received = to_int(r.get("qty_received", ""))
+                st.markdown("**%s** — %s | short %d of %d | → %s | held by %s"
+                            % (r.get("mcode", "?"), r.get("part_name", ""),
+                               ordered - received, ordered,
+                               r.get("location") or "location TBC",
+                               r.get("holder") or "unassigned"))
 
 # ============================================================
 # D. RECENT MOVEMENTS — from the project tracker (read-only)
@@ -174,11 +191,14 @@ with st.expander(f"🚚 **Recent Movements** ({len(movements)})", expanded=False
     if not movements:
         st.info("No Movement Log rows for this project.")
     else:
-        for m in list(reversed(movements))[:15]:
-            st.markdown("**%s** — %s | %s → %s | %s"
-                        % (m.get("date", "?"), m.get("item", ""),
-                           m.get("from") or "?", m.get("to") or "?",
-                           m.get("stage") or ""))
+        for _pname, _rows in _moves_by_project:
+            if _wide:
+                st.markdown("**%s** — %d" % (_pname, len(_rows)))
+            for m in list(reversed(_rows))[:15]:
+                st.markdown("**%s** — %s | %s → %s | %s"
+                            % (m.get("date", "?"), m.get("item", ""),
+                               m.get("from") or "?", m.get("to") or "?",
+                               m.get("stage") or ""))
 
 # ============================================================
 # E. RECENTLY DELIVERED ORDERS

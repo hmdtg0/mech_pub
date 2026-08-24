@@ -47,7 +47,10 @@ with c4:
         movements_store.refresh()
         st.rerun()
 
-ledger = movements_store.shipments_across_projects()
+# in_scope keeps rows that name no project, which is every courier
+# record: the central Shipments tab has no project column, so those
+# cannot be narrowed and are shown whole rather than guessed at.
+ledger = ui.in_scope(movements_store.shipments_across_projects())
 courier = shipments_store.fetch_shipments()
 
 # The main record is deliberately not linked anywhere in the UI.

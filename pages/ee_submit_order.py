@@ -9,7 +9,7 @@ from utils import (agent_entry, parts_tracker, project_colors,
 from utils.google_client import get_gspread_client
 from utils.orders_store import create_order
 from utils.drive_handler import upload_file
-from utils.ui import require_project
+from utils.ui import require_single_project
 from config import PROCESS_OPTIONS
 
 # Registering a project lives on the admin **Projects** page — it is setup work
@@ -88,7 +88,7 @@ default_manual_notes = _manual_notes_from_notes(reorder.get("notes", ""))
 # Project — which sheet this order is written to
 # ============================================================
 st.subheader("1. Project")
-require_project()
+require_single_project("Submit Order")
 _active_name, _active_sheet = project_registry.active()
 
 # Stated, not chosen: the project is picked once in the sidebar. An order going

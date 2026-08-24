@@ -461,6 +461,50 @@ def active_bom_sheet() -> Optional[str]:
     return bom_sheet(name) if name else None
 
 
+# The scope the whole app reads: one project, or every one at once. It is a
+# VIEW over the projects, not a project — `active()` still answers "which
+# record do I write to", because a page that files an order needs a real
+# sheet even while the reader is looking at everything (Hamid, 21 Aug).
+ALL = "All projects"
+
+
+def scope() -> str:
+    """`ALL`, or the active project's name."""
+    try:
+        import streamlit as st
+        if st.session_state.get("project_scope") == ALL and len(all_projects()) > 1:
+            return ALL
+    except Exception:
+        pass
+    return active()[0]
+
+
+def is_all() -> bool:
+    return scope() == ALL
+
+
+def set_scope(name: str) -> None:
+    """Point the session at one project, or at all of them. Caller reruns.
+
+    Picking `ALL` deliberately leaves `active_project` alone: it is the
+    project a write page falls back to, and the one the scope returns to
+    when you narrow again.
+    """
+    import streamlit as st
+    if name == ALL:
+        st.session_state["project_scope"] = ALL
+        return
+    st.session_state["project_scope"] = ""
+    set_active(name)
+
+
+def in_scope(value: str) -> bool:
+    """Whether a row tagged with this project name belongs on screen."""
+    if is_all():
+        return True
+    return str(value or "").strip() == active()[0]
+
+
 def set_active(name: str) -> None:
     """Point the session at a project; caller reruns."""
     projects = all_projects()
