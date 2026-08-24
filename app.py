@@ -138,14 +138,24 @@ pg = st.navigation(pages)
 st.markdown("""<style>
 [data-testid="stSidebarNav"] ul { max-height: none !important; }
 [data-testid="stSidebarNavViewButton"] { display: none !important; }
+/* Streamlit renders its page list ABOVE any custom sidebar content, which
+   put the one control that decides what every page shows below nineteen
+   links. The three sidebar regions each carry a stable data-testid, so the
+   column is simply re-ordered: header, our block, then the page list
+   (Hamid, 21 Aug: "this block should be on the very top"). Safe under the
+   pinned 1.38.0; revisit on any Streamlit upgrade. */
+[data-testid="stSidebarContent"] { display: flex; flex-direction: column; }
+[data-testid="stSidebarHeader"] { order: 0; }
+[data-testid="stSidebarUserContent"] { order: 1; }
+[data-testid="stSidebarNav"] { order: 2; }
 </style>""", unsafe_allow_html=True)
 
-# The custom sidebar block. Streamlit pins its navigation above ANY custom
-# sidebar content, so the picker cannot sit between nav groups — first place
-# it can be is directly under the nav, which is where it is. Order is by how
-# often a thing is needed: the project switch is a working control, identity
-# is something you check once a day, so the picker comes first and who-am-I
-# moves to the bottom.
+# The custom sidebar block, CSS-lifted above the page list (see the style
+# above). Order is by how often a thing is needed: the project switch decides
+# what every page shows, so it is the first thing in the sidebar, and identity
+# follows it. The whole block rides up together — it pushes the page list down
+# by its own height, which Hamid weighed against splitting it and preferred
+# (21 Aug: "its okay to keep them together").
 with st.sidebar:
     from config import IS_LOCAL
     from utils import parts_tracker, project_colors
