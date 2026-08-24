@@ -254,16 +254,39 @@ with st.sidebar:
         _options = ([project_registry.ALL] + _names if len(_names) > 1
                     else list(_names))
         _now = project_registry.scope()
+        _pinned_now = user_store.pinned_project(user.get("email", ""))
+
+        # Streamlit offers no way to style one option of a selectbox — the
+        # list is plain strings — so the pin travels IN the label, where it
+        # shows both in the open list and in the closed box. The value is the
+        # name; the marker is stripped straight back off.
+        def _label(name):
+            return "📌 %s" % name if name and name == _pinned_now else name
+
+        def _plain(label):
+            return label[2:] if label.startswith("📌 ") else label
+
         _pick_col, _link_col, _pin_col = st.columns(
             [3, 1.1, 0.6], vertical_alignment="center")
         with _pick_col:
-            _picked = st.selectbox(
-                "Project", _options,
+            _labels = [_label(o) for o in _options]
+            _picked = _plain(st.selectbox(
+                "Project", _labels,
                 index=_options.index(_now) if _now in _options else 0,
                 key="sidebar_project", label_visibility="collapsed",
                 help="What every page shows. \"%s\" widens the listings; the "
                      "pages that write to one record ask you to choose. "
-                     "Data: %s." % (project_registry.ALL, _source))
+                     "📌 marks the one you land on. Data: %s."
+                     % (project_registry.ALL, _source)))
+        if _picked == _pinned_now:
+            # Red and bold while the box is showing the pinned project, so
+            # the answer to "what am I pinned to" is visible without opening
+            # the list (Hamid, 21 Aug: "its not clear what is pinned").
+            st.html('<style>[data-testid="stSidebarUserContent"] '
+                    '[data-testid="stHorizontalBlock"] [data-testid="stSelectbox"] '
+                    'div[data-baseweb="select"] div[value] '
+                    '{ color:#b3261e !important; font-weight:600 !important; }'
+                    '</style>')
         if _picked != _now:
             project_registry.set_scope(_picked)
             st.rerun()
@@ -277,8 +300,7 @@ with st.sidebar:
             # One cell on your own row of the Users tab, written on the click
             # — not on every project switch, which would put a sheet write
             # behind an ordinary control.
-            _pinned_now = user_store.pinned_project(user.get("email", ""))
-            _is_pinned = _pinned_now == _picked
+            _is_pinned = bool(_pinned_now) and _pinned_now == _picked
             if st.button("📌" if _is_pinned else "📍", key="pin_project",
                          help=("Pinned — you land here. Click to unpin."
                                if _is_pinned else
