@@ -7,7 +7,8 @@ import streamlit as st
 
 from utils.auth import require_role
 from utils.google_client import get_gspread_client
-from utils import project_colors, tracker_order_ui, tracker_orders, ui
+from utils import (overview_board, project_colors, tracker_order_ui,
+                   tracker_orders, ui)
 from utils.orders_store import (
     fetch_all_orders, fetch_order_by_id, update_order,
 )
@@ -79,7 +80,11 @@ def order_card(order_id: str, user_name: str, progress: str = "",
     client = get_gspread_client()
 
     part_name = order.get("PartName", "Unknown")
-    status = order.get("Status", "new")
+    # The fragment refetches the order, so the reconciliation happens here
+    # too: the ledger moves a status forward past the stored value, exactly
+    # as the page-level list decided which band this card belongs to.
+    status = tracker_orders.effective_status(
+        order.get("Status", "new"), thread.get("derived", "") if thread else "")
     priority = order.get("Priority", "Normal")
     engineer = order.get("EngineerName", "")
     process = order.get("Process", "")
@@ -355,9 +360,20 @@ entries = []
 for o in all_orders:
     _oid = str(o.get("OrderID", "")).strip()
     _t = _thread_of.get(_oid)
+    # The status shown is the RECONCILED one — the ledger can move an order
+    # forward past the Orders tab's stored value, never backward (the same
+    # effective_status rule Process Order applies). Without this, an order
+    # received on the sheet still read NEW here: the Orders tab lags until
+    # someone advances it by hand, and M108 sat delivered-but-invisible
+    # (Hamid, 24 Aug: "i see one delivered but not showing up").
+    _stored = (o.get("Status") or "new").strip() or "new"
+    _eff = tracker_orders.effective_status(
+        _stored, _t.get("derived", "") if _t else "")
     entries.append({
-        "kind": "app", "order": o, "thread": _t,
-        "status": (o.get("Status") or "new").strip() or "new",
+        "kind": "app",
+        "order": dict(o, Status=_eff) if _eff != _stored else o,
+        "thread": _t,
+        "status": _eff,
         "priority": o.get("Priority", "Normal"),
         "who": o.get("EngineerName", ""),
         "text": " ".join([o.get("PartName", ""), o.get("PartID", ""), _oid]),
@@ -495,5 +511,29 @@ with tab_table:
             "Recipient": (o.get("Recipient", "") if o
                           else t.get("recipient", "")),
         })
-    st.dataframe(pd.DataFrame(_rows).astype(str), use_container_width=True,
-                 hide_index=True, height=ui.table_height(len(_rows)))
+    _df = pd.DataFrame(_rows).astype(str)
+    _df.index = range(1, len(_df) + 1)
+
+    # The Overview page's palette, one row per status — read from the same
+    # constants so the two tables can never drift apart.
+    _paint_by = {
+        "new": overview_board.COLOURS[overview_board.ORDERED],
+        "processing": overview_board.COLOURS[overview_board.ORDERED],
+        "ordered": overview_board.COLOURS[overview_board.ORDERED],
+        "shipped": overview_board.COLOURS[overview_board.SHIPPED],
+        "delivered": overview_board.COLOURS[overview_board.DELIVERED],
+        "cancelled": overview_board.COLOURS[overview_board.CANCELLED],
+    }
+
+    def _paint(row):
+        return ["background-color: %s"
+                % _paint_by.get(str(row.get("Status", "")).lower(), "")] * len(row)
+
+    st.dataframe(_df.style.apply(_paint, axis=1), use_container_width=True,
+                 hide_index=False, height=ui.table_height(len(_df)))
+    st.caption(
+        "🟩 light green — open: new, processing or ordered · "
+        "shipped keeps the same open green · 🟢 green — "
+        "delivered · ⬜ grey — cancelled. Statuses are reconciled "
+        "with the part ledger: a receipt on the sheet moves an order forward "
+        "even before anyone updates the Orders tab.")
