@@ -30,7 +30,7 @@ def _to_f(v):
 
 
 @st.fragment
-def order_card(order_id: str, user_name: str):
+def order_card(order_id: str, user_name: str, progress: str = ""):
     """Render one order's expander as an isolated fragment.
 
     The order is re-read from the (write-through) cache by id on every fragment
@@ -68,11 +68,21 @@ def order_card(order_id: str, user_name: str):
     status_color = STATUS_COLORS.get(status, "gray")
 
     _proj = (order.get("Project") or "").strip()
-    header = (
-        f"{priority_icon} "
-        + (f"{project_colors.tag(_proj)} " if _proj else "")
-        + f"**{part_name}** | 🔩 {process} | Qty: {quantity} | "
-        f"👤 {engineer} | :{status_color}[{status.upper()}] | {pct:.0%} done"
+    # The header follows the tracker cards' shape (Hamid, 24 Aug: "the labels
+    # need these info" — part identity, version, received progress, recipient),
+    # keeping the app half: the status chip and the engineer. Process, qty and
+    # the checklist live inside the card, where they always were.
+    header = " | ".join(
+        [f"{priority_icon} "
+         + (f"{project_colors.tag(_proj)} " if _proj else "")
+         + "**%s**" % (" — ".join(
+               b for b in (order.get("PartID", "").strip(), part_name) if b))]
+        + ["`%s`" % (order.get("Version", "").strip() or "no version")]
+        + [progress or f"Qty: {quantity}"]
+        + ([f"→ {order.get('Recipient', '').strip()}"]
+           if order.get("Recipient", "").strip() else [])
+        + [f":{status_color}[{status.upper()}]",
+           f"👤 {engineer}"]
     )
 
     with st.expander(header, expanded=False):
@@ -207,7 +217,7 @@ def order_card(order_id: str, user_name: str):
 
 
 
-def history_card(order: dict) -> None:
+def history_card(order: dict, progress: str = "") -> None:
     """One delivered/cancelled order, read-only. No fragment: nothing in it
     writes, so there is no partial rerun to isolate."""
     status = order.get("Status", "")
@@ -218,10 +228,19 @@ def history_card(order: dict) -> None:
     engineer = order.get("EngineerName", "")
     process = order.get("Process", "")
 
-    header = (
-        f"{priority_icon} **{order.get('PartName', 'Unknown')}** | 🔩 "
-        f"{process} | Qty: {order.get('Quantity', '')} | 👤 {engineer} "
-        f"| :{status_color}[{status.upper()}] | {created}"
+    _proj = (order.get("Project") or "").strip()
+    header = " | ".join(
+        [f"{priority_icon} "
+         + (f"{project_colors.tag(_proj)} " if _proj else "")
+         + "**%s**" % (" — ".join(
+               b for b in (order.get("PartID", "").strip(),
+                           order.get("PartName", "Unknown")) if b))]
+        + ["`%s`" % (order.get("Version", "").strip() or "no version")]
+        + [progress or f"Qty: {order.get('Quantity', '')}"]
+        + ([f"→ {order.get('Recipient', '').strip()}"]
+           if order.get("Recipient", "").strip() else [])
+        + [f":{status_color}[{status.upper()}]",
+           f"👤 {engineer}", created]
     )
     with st.expander(header, expanded=False):
         c1, c2, c3 = st.columns(3)
@@ -338,6 +357,16 @@ if search:
     _s = search.lower()
     filtered = [o for o in filtered if _s in o.get("PartName", "").lower()]
 
+# Each app order's received progress comes from its ledger thread — matched
+# on the central order id, which Order from BOM stamps onto every raise line.
+# A manual order with no thread keeps its plain quantity.
+_progress_of = {}
+for _t in _tracker_all:
+    _oid = str(_t.get("order_id", "")).strip()
+    if _oid:
+        _progress_of[_oid] = "%s/%s received" % (
+            _t.get("qty_received", 0), _t.get("qty_ordered", 0) or "?")
+
 # Sort: open before closed; URGENT first among the open; newest first within
 # each band. The status chip on every card says which band a row is in.
 def _band(o):
@@ -353,7 +382,8 @@ st.markdown("---")
 
 # --- Cards: live fragments while open, plain read-only once closed ---
 for order in filtered:
+    _oid = order.get("OrderID", "?")
     if order.get("Status") in _closed:
-        history_card(order)
+        history_card(order, _progress_of.get(_oid, ""))
     else:
-        order_card(order.get("OrderID", "?"), user["name"])
+        order_card(_oid, user["name"], _progress_of.get(_oid, ""))
