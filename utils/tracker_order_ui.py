@@ -1,6 +1,6 @@
 """Shared rendering for orders that live in the project tracker.
 
-Kept out of the pages so My Orders, All Orders and Order History show the same
+Kept out of the pages so My Orders and All Orders (open + history) show the same
 thing — one expander per order, in the app's usual idiom, with the two rows of
 the sheet pair spelled out: who ordered it and from where, who received it and
 where it went.

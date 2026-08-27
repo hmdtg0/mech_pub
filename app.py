@@ -89,7 +89,6 @@ work_pages = [
     st.Page("pages/admin_overview.py", title="Overview", icon="🗂", default=True),
     st.Page("pages/admin_all_orders.py", title="All Orders", icon="📊"),
     st.Page("pages/admin_process_order.py", title="Process Order", icon="🔧"),
-    st.Page("pages/admin_order_history.py", title="Order History", icon="📚"),
 ]
 
 if is_admin(user):
