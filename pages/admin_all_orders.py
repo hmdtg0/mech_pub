@@ -265,151 +265,95 @@ user = require_role("admin", "engineer", "logistics")
 
 st.title("📊 All Orders")
 
-# One page for every order, open or done (Hamid, 24 Aug: "merge order history
-# to all orders"). The split into two pages made people hunt: an order that
-# was delivered VANISHED from All Orders and reappeared elsewhere. Now it just
-# changes tab.
+# ONE list, open and done together (Hamid, 24 Aug: "keep them in one page,
+# the icon status next to them is enough information"). No tabs, no second
+# page: a delivered order stays exactly where it always was, wearing its
+# status chip, instead of vanishing to somewhere else. Open orders lead,
+# closed ones follow — an ordering, not a split.
 
-# --- load everything once, so the tab labels can carry honest counts --------
+# --- Orders recorded on the project trackers --------------------------------
+# On the sheet an order is a pair of rows (origin + receipt); it counts as
+# open until the receipt row has taken delivery of everything ordered.
 _tracker_all = ui.in_scope(tracker_orders.all_projects_orders())
 _tracker_open = [o for o in _tracker_all if not tracker_orders.is_complete(o)]
 _tracker_done = [o for o in _tracker_all if tracker_orders.is_complete(o)]
 
+st.markdown("### From the project trackers (%d — %d open, %d completed)"
+            % (len(_tracker_all), len(_tracker_open), len(_tracker_done)))
+tracker_order_ui.render_section(
+    _tracker_open + _tracker_done,
+    "No orders on the project trackers yet.", key="allorders")
+
+st.markdown("---")
+st.markdown("### Raised in this app")
+
 all_orders = ui.in_scope(fetch_all_orders())
-open_orders = [o for o in all_orders
-               if o.get("Status") not in ("delivered", "cancelled")]
-history = [o for o in all_orders
-           if o.get("Status") in ("delivered", "cancelled")]
+if not all_orders:
+    st.info("No orders raised in this app yet.")
+    st.stop()
 
-tab_open, tab_done = st.tabs([
-    "🟢 Open (%d)" % (len(_tracker_open) + len(open_orders)),
-    "📚 History (%d)" % (len(_tracker_done) + len(history)),
-])
+_closed = ("delivered", "cancelled")
 
-# ============================ OPEN ==========================================
-with tab_open:
-    # On the sheet an order is a pair of rows (origin + receipt); it counts as
-    # open until the receipt row has taken delivery of everything ordered.
-    st.markdown("### From the project trackers — open (%d of %d)"
-                % (len(_tracker_open), len(_tracker_all)))
-    st.caption("Raised on the sheet. Completed ones are under **History**.")
-    tracker_order_ui.render_section(
-        _tracker_open, "Every tracker order has received what was ordered.",
-        key="allorders")
+# --- Summary metrics: the whole ladder, cancelled included ---
+_statuses = list(ORDER_STATUSES) + ["cancelled"]
+for col, status in zip(st.columns(len(_statuses)), _statuses):
+    col.metric(status.upper(),
+               sum(1 for o in all_orders if o.get("Status") == status))
 
-    st.markdown("---")
-    st.markdown("### Raised in this app")
+_total_cost_cny = sum(_to_f(o.get("PartsCostCNY")) + _to_f(o.get("ShippingCostCNY"))
+                      for o in all_orders)
+if _total_cost_cny > 0:
+    st.caption("💰 Recorded costs across all orders: "
+               "**£%s GBP** (¥%s CNY · rate 1 CNY = %s GBP)"
+               % (format(_total_cost_cny * CNY_TO_GBP, ",.0f"),
+                  format(_total_cost_cny, ",.0f"), CNY_TO_GBP))
 
-    if not open_orders:
-        st.info("No active orders raised in this app — delivered and "
-                "cancelled ones are under **History**.")
+st.markdown("---")
+
+# --- Filters ---
+col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+with col_f1:
+    status_filter = st.selectbox("Status", ["all"] + _statuses, index=0,
+                                 key="ao_status")
+with col_f2:
+    priority_filter = st.selectbox("Priority", ["all", "URGENT", "Normal"],
+                                   key="ao_priority")
+with col_f3:
+    engineers = sorted(set(o.get("EngineerName", "") for o in all_orders
+                           if o.get("EngineerName")))
+    engineer_filter = st.selectbox("Engineer", ["all"] + engineers,
+                                   key="ao_engineer")
+with col_f4:
+    search = st.text_input("Search Part Name", placeholder="Type to filter...",
+                           key="ao_search")
+
+filtered = all_orders
+if status_filter != "all":
+    filtered = [o for o in filtered if o.get("Status") == status_filter]
+if priority_filter != "all":
+    filtered = [o for o in filtered if o.get("Priority") == priority_filter]
+if engineer_filter != "all":
+    filtered = [o for o in filtered if o.get("EngineerName") == engineer_filter]
+if search:
+    _s = search.lower()
+    filtered = [o for o in filtered if _s in o.get("PartName", "").lower()]
+
+# Sort: open before closed; URGENT first among the open; newest first within
+# each band. The status chip on every card says which band a row is in.
+def _band(o):
+    if o.get("Status") in _closed:
+        return 2
+    return 0 if o.get("Priority") == "URGENT" else 1
+
+filtered.sort(key=lambda o: o.get("CreatedAt", ""), reverse=True)
+filtered.sort(key=_band)
+
+st.markdown(f"**{len(filtered)} orders** shown")
+st.markdown("---")
+
+# --- Cards: live fragments while open, plain read-only once closed ---
+for order in filtered:
+    if order.get("Status") in _closed:
+        history_card(order)
     else:
-        # --- Summary metrics ---
-        _metric_cols = st.columns(5)
-        for col, status in zip(_metric_cols, ORDER_STATUSES):
-            count = sum(1 for o in open_orders if o.get("Status") == status)
-            col.metric(status.upper(), count)
-
-        st.markdown("---")
-
-        # --- Filters --- (explicit keys: the History tab draws near-identical
-        # selectboxes, and Streamlit's auto-generated ids collide on same
-        # label + same options)
-        col_f1, col_f2, col_f3 = st.columns(3)
-        with col_f1:
-            status_filter = st.selectbox("Status", ["all"] + ORDER_STATUSES,
-                                         index=0, key="ao_status")
-        with col_f2:
-            priority_filter = st.selectbox("Priority",
-                                           ["all", "URGENT", "Normal"],
-                                           key="ao_priority")
-        with col_f3:
-            engineers = sorted(set(o.get("EngineerName", "")
-                                   for o in open_orders
-                                   if o.get("EngineerName")))
-            engineer_filter = st.selectbox("Engineer", ["all"] + engineers,
-                                           key="ao_engineer")
-
-        filtered = open_orders
-        if status_filter != "all":
-            filtered = [o for o in filtered if o.get("Status") == status_filter]
-        if priority_filter != "all":
-            filtered = [o for o in filtered if o.get("Priority") == priority_filter]
-        if engineer_filter != "all":
-            filtered = [o for o in filtered if o.get("EngineerName") == engineer_filter]
-
-        # Sort: URGENT first, then newest first within same priority
-        urgent = [o for o in filtered if o.get("Priority") == "URGENT"]
-        normal = [o for o in filtered if o.get("Priority") != "URGENT"]
-        urgent.sort(key=lambda o: o.get("CreatedAt", ""), reverse=True)
-        normal.sort(key=lambda o: o.get("CreatedAt", ""), reverse=True)
-        filtered = urgent + normal
-
-        st.markdown(f"**{len(filtered)} orders** shown")
-        st.markdown("---")
-
-        # --- Order cards (each an isolated fragment) ---
-        for order in filtered:
-            order_card(order.get("OrderID", "?"), user["name"])
-
-# =========================== HISTORY ========================================
-with tab_done:
-    st.markdown("### From the project trackers — completed (%d)"
-                % len(_tracker_done))
-    tracker_order_ui.render_section(
-        _tracker_done, "No tracker order has received everything ordered yet.",
-        key="history")
-
-    st.markdown("---")
-    st.markdown("### Raised in this app")
-
-    if not history:
-        st.info("No delivered or cancelled orders raised in this app yet.")
-    else:
-        total_cost_cny = sum(
-            _to_f(o.get("PartsCostCNY")) + _to_f(o.get("ShippingCostCNY"))
-            for o in history)
-        total_cost_gbp = total_cost_cny * CNY_TO_GBP
-
-        h1, h2, h3 = st.columns(3)
-        h1.metric("Delivered",
-                  sum(1 for o in history if o.get("Status") == "delivered"))
-        h2.metric("Cancelled",
-                  sum(1 for o in history if o.get("Status") == "cancelled"))
-        h3.metric("Total Cost", f"£{total_cost_gbp:,.0f}",
-                  help=f"¥{total_cost_cny:,.0f} CNY "
-                       f"(rate: 1 CNY = {CNY_TO_GBP} GBP)")
-
-        st.markdown("---")
-
-        hf1, hf2, hf3 = st.columns(3)
-        with hf1:
-            h_status = st.selectbox("Status", ["all", "delivered", "cancelled"],
-                                    key="hist_status")
-        with hf2:
-            h_engineers = sorted(set(o.get("EngineerName", "") for o in history
-                                     if o.get("EngineerName")))
-            h_engineer = st.selectbox("Engineer", ["all"] + h_engineers,
-                                      key="hist_engineer")
-        with hf3:
-            h_search = st.text_input("Search Part Name",
-                                     placeholder="Type to filter...",
-                                     key="hist_search")
-
-        h_filtered = history
-        if h_status != "all":
-            h_filtered = [o for o in h_filtered if o.get("Status") == h_status]
-        if h_engineer != "all":
-            h_filtered = [o for o in h_filtered
-                          if o.get("EngineerName") == h_engineer]
-        if h_search:
-            _s = h_search.lower()
-            h_filtered = [o for o in h_filtered
-                          if _s in o.get("PartName", "").lower()]
-        h_filtered.sort(key=lambda o: o.get("CreatedAt", ""), reverse=True)
-
-        st.markdown(f"**{len(h_filtered)} orders** shown")
-        st.markdown("---")
-
-        for order in h_filtered:
-            history_card(order)
+        order_card(order.get("OrderID", "?"), user["name"])
