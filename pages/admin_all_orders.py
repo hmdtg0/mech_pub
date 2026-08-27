@@ -2,6 +2,7 @@
 import json
 from datetime import datetime, date
 
+import pandas as pd
 import streamlit as st
 
 from utils.auth import require_role
@@ -443,29 +444,56 @@ st.markdown("**%d orders** shown · %d in both records · %d app-only "
                len(_ledger_only)))
 st.markdown("---")
 
-# --- Cards: capped like every long list here --------------------------------
-MAX_SHOW = 20
-shown = view
-if len(view) > MAX_SHOW:
-    if not st.checkbox("Show all %d (showing first %d)" % (len(view), MAX_SHOW),
-                       key="ao_show_all"):
-        shown = view[:MAX_SHOW]
+# --- Two views of the same filtered list: cards, and one row per order ------
+tab_cards, tab_table = st.tabs(["🗂 Cards (%d)" % len(view),
+                                "📋 Table View (%d)" % len(view)])
 
-for e in shown:
-    if e["kind"] == "ledger":
-        tracker_order_ui.render_order(
-            e["thread"], "ao_%s_%s" % (e["thread"]["mcode"],
-                                       e["thread"].get("order_id", "")))
-    elif e["status"] in _closed:
-        history_card(e["order"],
-                     _progress_text(e["thread"]) if e["thread"] else "",
-                     e["thread"])
-    else:
-        order_card(e["order"].get("OrderID", "?"), user["name"],
-                   _progress_text(e["thread"]) if e["thread"] else "",
-                   e["thread"])
+with tab_cards:
+    MAX_SHOW = 20
+    shown = view
+    if len(view) > MAX_SHOW:
+        if not st.checkbox("Show all %d (showing first %d)"
+                           % (len(view), MAX_SHOW), key="ao_show_all"):
+            shown = view[:MAX_SHOW]
 
-with st.expander("📋 Ledger table view (%d threads)" % len(_tracker_all)):
-    st.dataframe(tracker_order_ui.orders_table(_tracker_all),
-                 use_container_width=True, hide_index=True,
-                 height=ui.table_height(len(_tracker_all)))
+    for e in shown:
+        if e["kind"] == "ledger":
+            tracker_order_ui.render_order(
+                e["thread"], "ao_%s_%s" % (e["thread"]["mcode"],
+                                           e["thread"].get("order_id", "")))
+        elif e["status"] in _closed:
+            history_card(e["order"],
+                         _progress_text(e["thread"]) if e["thread"] else "",
+                         e["thread"])
+        else:
+            order_card(e["order"].get("OrderID", "?"), user["name"],
+                       _progress_text(e["thread"]) if e["thread"] else "",
+                       e["thread"])
+
+with tab_table:
+    # One row per order, both record systems, same filters as the cards.
+    # Everything cast to str: app quantities are ints, ledger ones are
+    # sometimes words, and Arrow refuses the mixture.
+    _rows = []
+    for e in view:
+        o, t = e.get("order") or {}, e.get("thread") or {}
+        _rows.append({
+            "Project": (o.get("Project") or t.get("project", "")).strip()
+                       if o else t.get("project", ""),
+            "M-Code": o.get("PartID", "") or t.get("mcode", ""),
+            "Part": o.get("PartName", "") or t.get("part_name", ""),
+            "Version": o.get("Version", "") or t.get("version", ""),
+            "Order ID": (o.get("OrderID", "") if o else "")
+                        or str(t.get("order_id", "")),
+            "Date": e["when"] or t.get("date", ""),
+            "Ordered": str(t.get("qty_ordered", "") if t
+                           else o.get("Quantity", "")),
+            "Received": str(t.get("qty_received", "")) if t else "",
+            "Status": e["status"],
+            "Priority": e["priority"] if e["kind"] == "app" else "",
+            "Raised by": e["who"],
+            "Recipient": (o.get("Recipient", "") if o
+                          else t.get("recipient", "")),
+        })
+    st.dataframe(pd.DataFrame(_rows).astype(str), use_container_width=True,
+                 hide_index=True, height=ui.table_height(len(_rows)))
