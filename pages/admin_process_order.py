@@ -72,7 +72,9 @@ def _parse_eta(text):
 
 def _history_facts(history):
     """(derived_status, latest_owner, latest_eta, detail) from a part's
-    ledger rows.
+    ledger rows. Since 28 Aug the PART-level derived_status only shapes
+    the detail string here — order status joins the order's own thread
+    (_thread_derived), because one part can carry several order groups.
 
     The Orders tab said "new" for a whole migrated batch that was in truth
     ordered, shipped or delivered (Hamid, 18 Aug). The part's history knows:
@@ -126,17 +128,37 @@ for _proj in {o.get("Project", "") for o in orders}:
     for _pm, _part in parts_tracker.fetch_all_parts(_rec).items():
         _facts[(_proj, _pm)] = _history_facts(_part.get("history", []))
 
+# STATUS comes from the order's OWN ledger thread, not the whole part: a
+# part can carry several Order/Sample ID groups, and judging this order
+# by another thread's rows buckets it wrong — M108 sat "active" here
+# while All Orders and Logistics said delivered (28 Aug 2026). Same
+# order-id join the orders desk and Logistics use; _facts stays the
+# source for the part-level extras (owner, ETA, detail) only.
+_thread_of = {}
+for _t in ui.in_scope(tracker_orders.all_projects_orders()):
+    _toid = str(_t.get("order_id", "")).strip()
+    if _toid:
+        _thread_of[_toid] = _t
+
+
+def _thread_derived(o):
+    """The derived status of this order's own ledger thread ("" if the
+    order never got an id-stamped thread — stored status then stands)."""
+    _t = _thread_of.get(str(o.get("OrderID", "")).strip())
+    return _t.get("derived", "") if _t else ""
+
 
 def order_facts(o):
-    """(effective_status, latest_owner, history_eta, detail). History can
-    only move the status FORWARD past the Orders tab's stored value —
+    """(effective_status, latest_owner, history_eta, detail). The thread
+    can only move the status FORWARD past the Orders tab's stored value —
     except "cancelled", which is terminal (tracker_orders.effective_status
-    is the one rulebook)."""
-    derived, owner, eta, detail = _facts.get(
+    is the one rulebook). Owner/ETA/detail stay part-level: the latest
+    custody story is the part's, whichever thread wrote it."""
+    _, owner, eta, detail = _facts.get(
         (o.get("Project", ""), str(o.get("PartID", "")).strip()),
         ("", "", "", ""))
     stored = o.get("Status", "new")
-    return (tracker_orders.effective_status(stored, derived),
+    return (tracker_orders.effective_status(stored, _thread_derived(o)),
             owner, eta, detail)
 
 
@@ -252,11 +274,14 @@ project_name = order.get("Project", "")
 record_id = project_registry.tracker_sheet(project_name) if project_name else ""
 mcode = str(order.get("PartID", "")).strip()
 
-# The status shown (and advanced from) is the EFFECTIVE one: the part's
-# history can move it forward past what the Orders tab remembers, and a
-# cancellation on either side is terminal.
-derived_status, latest_owner, history_eta, history_detail = _facts.get(
+# The status shown (and saved back to the Orders tab below) is the
+# EFFECTIVE one: this order's OWN thread can move it forward past what
+# the Orders tab remembers, and a cancellation on either side is
+# terminal. Thread, not part — the part-level derived could offer
+# another thread's status to the save button.
+_, latest_owner, history_eta, history_detail = _facts.get(
     (project_name, mcode), ("", "", "", ""))
+derived_status = _thread_derived(order)
 status = tracker_orders.effective_status(stored_status, derived_status)
 status_idx = ORDER_STATUSES.index(status) if status in ORDER_STATUSES else 0
 status_color = STATUS_COLORS.get(status, "gray")
@@ -274,8 +299,9 @@ if status != stored_status:
     _sync_eta = history_eta if (history_eta and _eta_missing) else ""
     sync1, sync2 = st.columns([3, 1.4], vertical_alignment="center")
     with sync1:
-        st.caption("**%s** is derived from the part's history — the Orders "
-                   "tab still says '%s'." % (status.upper(), stored_status))
+        st.caption("**%s** is derived from this order's own ledger thread "
+                   "— the Orders tab still says '%s'."
+                   % (status.upper(), stored_status))
     with sync2:
         label = ("💾 Save %s + ETA to Orders" % status.upper()
                  if _sync_eta else "💾 Save %s to Orders" % status.upper())
