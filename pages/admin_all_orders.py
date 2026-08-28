@@ -513,8 +513,10 @@ with tab_table:
         o, t = e.get("order") or {}, e.get("thread") or {}
         _code = e["code"]
         if _code:
+            # Same tab, like the cards' button: the address carries the
+            # part, so a full page load lands right (Hamid, 24 Aug).
             _cell = ('<a href="tracker_part_detail?project=%s&part=%s" '
-                     'target="_blank" title="Open %s on Part Detail">%s</a>'
+                     'title="Open %s on Part Detail">%s</a>'
                      % (quote(e["project"]), quote(_code), escape(_code),
                         escape(_code)))
         else:
@@ -541,17 +543,21 @@ with tab_table:
     # the page scrolls. Styled to read like the Overview page's table, the
     # reference UI: light header band, thin row rules, the status palette on
     # whole rows.
-    st.markdown(
-        '<table style="width:100%%;border-collapse:collapse;font-size:13px">'
+    # st.html, not st.markdown: the markdown renderer rewrites EVERY anchor
+    # to target="_blank", and Hamid wants the link to behave like the cards'
+    # button — same tab (24 Aug). st.html leaves the anchors alone.
+    st.html(
+        '<table class="ao-table" style="width:100%%;border-collapse:collapse;'
+        'font-size:13px">'
         '<thead><tr style="background:#fafafa">%s</tr></thead>'
         '<tbody>%s</tbody></table>'
-        '<style>.stMarkdown table td, .stMarkdown table th '
+        '<style>.ao-table td, .ao-table th '
         '{padding:5px 10px; border-bottom:1px solid #e6e6e6; '
-        'text-align:left;} .stMarkdown table th '
-        '{font-weight:600; color:#555; border-bottom:1px solid #d5d5d5;}'
+        'text-align:left;} .ao-table th '
+        '{font-weight:600; color:#555; border-bottom:1px solid #d5d5d5;} '
+        '.ao-table a {color:#1a73e8; text-decoration:underline;}'
         '</style>'
-        % ("".join("<th>%s</th>" % h for h in _heads), "".join(_body)),
-        unsafe_allow_html=True)
+        % ("".join("<th>%s</th>" % h for h in _heads), "".join(_body)))
 
     st.caption(overview_board.LEGEND)
     st.caption(
