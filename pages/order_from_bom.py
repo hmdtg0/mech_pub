@@ -251,24 +251,32 @@ if st.session_state.get("ofb_loaded_draft"):
     else:
         st.info("Working from draft **%s** — submitting will clear it."
                 % st.session_state["ofb_loaded_draft"])
-# Colleagues' drafts only, one line each — YOURS is never listed, it
-# auto-resumes (Hamid, 28 Aug: "as we automatically relaoding from order
-# draft tab, we dont need this" — the 📂 expander died with it). What
-# stays is the two-person hand-off: the PM opens the engineer's draft
-# right here. Most days nothing renders at all.
-for _n in sorted(n for n in _drafts if n != _SLOT):
-    _d = _drafts[_n]
+# Colleagues' drafts, one line each, so ANYONE can open and submit them
+# (Hamid, 28 Aug: "saved draft should be available for everyone, not the
+# person did it"). YOURS is never listed — it auto-resumes. Fed by the
+# same 60 s cached summary as the All Orders ledger, NOT the
+# session-frozen list, so a draft saved while this page sits open still
+# appears within a minute; ▶ Open fetches the fresh lines at click time.
+for _sum in sorted((s for s in order_drafts.all_drafts_cached()
+                    if s["Project"] == project and s["name"] != _SLOT),
+                   key=lambda s: s["name"]):
+    _n = _sum["name"]
     _oc1, _oc2, _oc3 = st.columns([4, 0.95, 0.6],
                                   vertical_alignment="center")
     _oc1.markdown("📥 **%s** — %s, %s (%d part%s)"
-                  % (_n, _d["saved_by"], _d["saved_at"], len(_d["lines"]),
-                     "" if len(_d["lines"]) == 1 else "s"))
+                  % (_n, _sum["saved_by"], _sum["saved_at"], _sum["parts"],
+                     "" if _sum["parts"] == 1 else "s"))
     if _oc2.button("▶ Open", key="ofb_open_%s" % _n,
                    use_container_width=True,
                    help="Load this draft into the tables to review "
                         "and submit."):
-        _queue_draft(_n, _d)
-        st.rerun()
+        _fresh = order_drafts.list_drafts(project)
+        if _n in _fresh:
+            _queue_draft(_n, _fresh[_n])
+            st.rerun()
+        else:
+            st.error("That draft is gone — submitted or deleted moments "
+                     "ago.")
     if _oc3.button("🗑", key="ofb_del_%s" % _n, use_container_width=True,
                    help="Delete this draft from the Order Drafts tab."):
         _why = order_drafts.delete_draft(project, _n)
