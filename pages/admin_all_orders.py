@@ -537,17 +537,29 @@ with tab_table:
         _body.append('<tr style="background:%s">%s</tr>'
                      % (_paint_by.get(e["status"], "#ffffff"),
                         "".join("<td>%s</td>" % v for v in _vals)))
+    # House rule (18 Aug): tables never clip or scroll inside themselves —
+    # the page scrolls. Styled to read like the Overview page's table, the
+    # reference UI: light header band, thin row rules, the status palette on
+    # whole rows.
     st.markdown(
-        '<div style="max-height:620px;overflow:auto;border:1px solid #e6e6e6;'
-        'border-radius:6px"><table style="width:100%%;border-collapse:collapse;'
-        'font-size:13px"><thead><tr style="position:sticky;top:0;'
-        'background:#fafafa;z-index:1">%s</tr></thead><tbody>%s</tbody>'
-        '</table></div>'
+        '<table style="width:100%%;border-collapse:collapse;font-size:13px">'
+        '<thead><tr style="background:#fafafa">%s</tr></thead>'
+        '<tbody>%s</tbody></table>'
         '<style>.stMarkdown table td, .stMarkdown table th '
-        '{padding:4px 10px; border-bottom:1px solid #eee; text-align:left; '
-        'white-space:nowrap;}</style>'
+        '{padding:5px 10px; border-bottom:1px solid #e6e6e6; '
+        'text-align:left;} .stMarkdown table th '
+        '{font-weight:600; color:#555; border-bottom:1px solid #d5d5d5;}'
+        '</style>'
         % ("".join("<th>%s</th>" % h for h in _heads), "".join(_body)),
         unsafe_allow_html=True)
+
+    st.caption(
+        "🟩 light green — open: new, processing, ordered or shipped "
+        "· 🟢 green — delivered · ⬜ grey — cancelled. "
+        "The M-Code opens the part on **Part Detail** in one click. Statuses "
+        "are reconciled with the part ledger: a receipt on the sheet moves "
+        "an order forward even before anyone updates the Orders tab."
+    )
     st.caption(
         "🟩 light green — open: new, processing or ordered · "
         "shipped keeps the same open green · 🟢 green — "
