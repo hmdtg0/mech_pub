@@ -71,6 +71,34 @@ def list_drafts(project: str) -> Dict[str, dict]:
     return out
 
 
+def all_drafts() -> List[dict]:
+    """Every draft on the tab, one summary row each — the app-wide ledger
+    line (Hamid, 28 Aug: "you need to have a real ledger for this draft").
+    Keys match what ui.in_scope filters on ("Project")."""
+    seen: Dict[tuple, dict] = {}
+    for row in _rows():
+        row = list(row) + [""] * (len(HEADERS) - len(row))
+        proj, name = str(row[0]).strip(), str(row[1]).strip()
+        if not name:
+            continue
+        d = seen.setdefault((proj, name), {
+            "Project": proj, "name": name,
+            "saved_by": row[2], "saved_at": row[3], "parts": 0})
+        if str(row[6]).strip():
+            d["parts"] += 1
+    return list(seen.values())
+
+
+_SUMMARY_KEY = "central:order_drafts_summary"
+
+
+def all_drafts_cached() -> List[dict]:
+    """The summary above, cached briefly — it sits on the landing page, so
+    it must not cost a sheet read per rerun. Saves and deletes invalidate."""
+    from utils import data_cache
+    return data_cache.get(_SUMMARY_KEY, 60.0, all_drafts)
+
+
 def save_draft(project: str, name: str, saved_by: str, units, build: str,
                lines: List[dict]) -> str:
     """Write a draft, replacing any same-named one for this project.
@@ -110,6 +138,8 @@ def save_draft(project: str, name: str, saved_by: str, units, build: str,
         _on_ws(_write)
     except Exception as exc:
         return "Could not write the draft: %s" % exc
+    from utils import data_cache
+    data_cache.invalidate(_SUMMARY_KEY)
     return ""
 
 
@@ -133,4 +163,6 @@ def delete_draft(project: str, name: str) -> str:
         _on_ws(_write)
     except Exception as exc:
         return "Could not delete the draft: %s" % exc
+    from utils import data_cache
+    data_cache.invalidate(_SUMMARY_KEY)
     return ""

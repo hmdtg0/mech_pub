@@ -18,13 +18,34 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from utils.auth import require_role
-from utils import (movements_store, orders_desk, overview_board,
-                   parts_tracker, project_colors, project_registry,
-                   shipments_store, stock_store, ui, user_store)
+from utils import (movements_store, order_drafts, orders_desk,
+                   overview_board, parts_tracker, project_colors,
+                   project_registry, shipments_store, stock_store, ui,
+                   user_store)
 
 user = require_role("admin", "engineer", "logistics")
 
 st.title("📊 All Orders")
+
+# 📝 The drafts ledger line — work in progress on Order from BOM, shown
+# where everyone already looks (Hamid, 28 Aug: "a real ledger for this
+# draft ... maybe in the overview page"). Deliberately NOT a status on
+# the board: a draft is a proposal, not an order (DECISIONS §47) — one
+# cheap cached line, both views.
+_draft_ledger = ui.in_scope(order_drafts.all_drafts_cached())
+if _draft_ledger:
+    st.caption("📝 **%d draft(s) in progress** on **🧾 Order from BOM**: %s"
+               % (len(_draft_ledger),
+                  " · ".join(
+                      "**%s** — %s%d part%s, %s" % (
+                          d["name"],
+                          ("%s, " % d["Project"]) if project_registry.is_all()
+                          else "",
+                          d["parts"], "" if d["parts"] == 1 else "s",
+                          d.get("saved_at") or "?")
+                      for d in sorted(_draft_ledger,
+                                      key=lambda x: x.get("saved_at") or "",
+                                      reverse=True))))
 
 _view = st.radio("View", ["🗺 Board", "📦 Orders"], horizontal=True,
                  key="ov_view", label_visibility="collapsed")

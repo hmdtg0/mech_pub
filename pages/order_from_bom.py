@@ -158,15 +158,98 @@ if _pending:
     st.session_state.pop("ofb_auto_base", None)
     st.session_state.pop("ofb_auto_pending", None)
 
+# Discarding the rolling draft resets §1 too — same pre-widget hand-off.
+if st.session_state.pop("ofb_pending_reset", None):
+    st.session_state["ofb_units"] = 1
+    st.session_state["ofb_build"] = ""
+    st.session_state["ofb_eta"] = None
+
 # --- Drafts: the hand-off between whoever fills and whoever submits ---------
 # An engineer fills the selection and SAVES it; the PM loads it here, reviews
 # and submits (Hamid, 19 Aug). Drafts live on the main record's Order Drafts
 # tab — named, visible on the sheet, per project. Nothing about a draft is an
 # order: loading one only fills this page.
 _drafts = _ws["drafts"]
+
+
+def _queue_draft(_name: str, _d: dict) -> None:
+    """Stage a draft to fill the page on the next run — the pre-widget
+    hand-off at the top applies it before §1's widgets exist."""
+    _seed_rows = {}
+    for _r in bom_rows:
+        _seed_rows[str(parts_model.normalise_code(
+            str(_r.get("mcode", "") or "")))] = {"include": False}
+    for _l in _d["lines"]:
+        _entry = {"include": True}
+        if str(_l.get("qty", "")).strip().isdigit():
+            _entry["Qty"] = int(_l["qty"])
+        if str(_l.get("recipient", "")).strip():
+            _entry["Recipient"] = _l["recipient"].strip()
+        if str(_l.get("priority", "")).strip():
+            _entry["Priority"] = _l["priority"].strip()
+        if str(_l.get("notes", "")).strip():
+            _entry["Notes"] = _l["notes"].strip()
+        for _fmt in ("%d %b %Y", "%Y-%m-%d"):
+            try:
+                _entry["ETA"] = datetime.strptime(
+                    str(_l.get("eta", "")).strip(), _fmt).date()
+                break
+            except ValueError:
+                continue
+        _seed_rows[str(_l["part"]).strip()] = _entry
+    try:
+        _units_val = max(1, int(str(_d.get("units") or "1")))
+    except ValueError:
+        _units_val = 1
+    st.session_state["ofb_pending_draft"] = {
+        "name": _name, "units": _units_val,
+        "build": str(_d.get("build") or ""),
+        # The seed signature must match what §1 will compute for the
+        # loaded units — the hand-off clears a leftover §1 ETA to the
+        # same end (the draft never stores a default ETA).
+        "seed": {"sig": "%s_" % _units_val, "rows": _seed_rows}}
+
+
+_SLOT = "⏳ draft — %s" % user["name"]
+# Your own rolling draft comes back BY ITSELF (Hamid, 28 Aug: "currently
+# it keeps disapearing" — it lived on the tab, but a fresh session opened
+# the page pristine and never said so). Once per session; discarding it,
+# or having loaded another draft, is not argued with.
+if (_SLOT in _drafts and not st.session_state.get("ofb_auto_resumed")
+        and not st.session_state.get("ofb_loaded_draft")
+        and not st.session_state.get("ofb_frames")):
+    st.session_state["ofb_auto_resumed"] = True
+    _queue_draft(_SLOT, _drafts[_SLOT])
+    st.rerun()
+
 if st.session_state.get("ofb_loaded_draft"):
-    st.info("Working from draft **%s** — submitting will clear it."
-            % st.session_state["ofb_loaded_draft"])
+    if st.session_state["ofb_loaded_draft"] == _SLOT:
+        _bi, _bd = st.columns([4, 1.3], vertical_alignment="center")
+        _bi.info("▶ Resumed your draft — **%s**, saved %s. Submitting "
+                 "clears it."
+                 % (_SLOT, _drafts.get(_SLOT, {}).get("saved_at") or "?"))
+        if _bd.button("🗑 Discard draft", key="ofb_slot_discard",
+                      use_container_width=True,
+                      help="Delete the saved draft and start clean."):
+            _why = order_drafts.delete_draft(project, _SLOT)
+            if _why:
+                st.error(_why)
+            else:
+                _ws["drafts"] = order_drafts.list_drafts(project)
+                for _k in ([k for k in st.session_state
+                            if str(k).startswith("ofb_grid_")]
+                           + ["ofb_frames", "ofb_seed", "ofb_loaded_draft",
+                              "ofb_auto_base", "ofb_auto_pending",
+                              "ofb_auto_saved", "ofb_auto_ts",
+                              "ofb_auto_at", "ofb_auto_note"]):
+                    st.session_state.pop(_k, None)
+                st.session_state["ofb_pending_reset"] = True
+                st.session_state["ofb_nonce"] = (
+                    st.session_state.get("ofb_nonce", 0) + 1)
+                st.rerun()
+    else:
+        st.info("Working from draft **%s** — submitting will clear it."
+                % st.session_state["ofb_loaded_draft"])
 if _drafts:
     with st.expander("📂 Load a saved draft (%d)" % len(_drafts)):
         st.caption("Listed as of when this page loaded — ↻ Refresh above "
@@ -181,40 +264,7 @@ if _drafts:
         c_load, c_del = st.columns([1, 1])
         if c_load.button("Open this draft", type="primary",
                          key="ofb_draft_load"):
-            _d = _drafts[_pick]
-            _seed_rows = {}
-            for _r in bom_rows:
-                _seed_rows[str(parts_model.normalise_code(
-                    str(_r.get("mcode", "") or "")))] = {"include": False}
-            from datetime import datetime as _dt
-            for _l in _d["lines"]:
-                _entry = {"include": True}
-                if str(_l.get("qty", "")).strip().isdigit():
-                    _entry["Qty"] = int(_l["qty"])
-                if str(_l.get("recipient", "")).strip():
-                    _entry["Recipient"] = _l["recipient"].strip()
-                if str(_l.get("priority", "")).strip():
-                    _entry["Priority"] = _l["priority"].strip()
-                if str(_l.get("notes", "")).strip():
-                    _entry["Notes"] = _l["notes"].strip()
-                for _fmt in ("%d %b %Y", "%Y-%m-%d"):
-                    try:
-                        _entry["ETA"] = _dt.strptime(
-                            str(_l.get("eta", "")).strip(), _fmt).date()
-                        break
-                    except ValueError:
-                        continue
-                _seed_rows[str(_l["part"]).strip()] = _entry
-            try:
-                _units_val = max(1, int(str(_d.get("units") or "1")))
-            except ValueError:
-                _units_val = 1
-            st.session_state["ofb_pending_draft"] = {
-                "name": _pick, "units": _units_val,
-                "build": str(_d.get("build") or ""),
-                # The seed signature must match what §1 will compute for the
-                # loaded units (the draft never stores a default ETA).
-                "seed": {"sig": "%s_" % _units_val, "rows": _seed_rows}}
+            _queue_draft(_pick, _drafts[_pick])
             st.rerun()
         if c_del.button("Delete this draft", key="ofb_draft_del"):
             _why = order_drafts.delete_draft(project, _pick)
@@ -684,7 +734,7 @@ st.markdown("**%d of %d parts selected.**" % (len(chosen), len(rows)))
 # when the selection changed (ofb_state.autosave_due), the top 💾 Save
 # writes it NOW. It shows in 📂 like any draft, so the PM can load the
 # current state at any moment, and a successful submit clears it.
-AUTOSAVE_NAME = "⏳ draft — %s" % user["name"]
+AUTOSAVE_NAME = _SLOT   # one name for the slot, defined by the drafts block
 st.session_state["ofb_auto_pending"] = {
     "units": units, "build": build_tag.strip(),
     "lines": [{"part": c["m_code"], "qty": c["quantity"],
