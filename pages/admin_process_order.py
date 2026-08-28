@@ -317,203 +317,11 @@ if record_id and mcode:
 
 st.markdown("---")
 
-# --- Status transition ---
-st.subheader("Status")
-scol1, scol2, scol3 = st.columns(3)
-
-if status == "cancelled":
-    with scol2:
-        st.markdown("**Current: CANCELLED**")
-    st.caption("This order is cancelled — the ledger keeps its story. If "
-               "the part is needed again, raise a NEW order; a later raise "
-               "line resets the slate.")
-else:
-    if status_idx > 0:
-        with scol1:
-            prev_status = ORDER_STATUSES[status_idx - 1]
-            if st.button(f"⬅ Back to {prev_status.upper()}", use_container_width=True):
-                if client:
-                    update_order(client, order_id, {"Status": prev_status})
-                    st.rerun()
-
-    with scol2:
-        st.markdown(f"**Current: {status.upper()}**")
-
-    if status_idx < len(ORDER_STATUSES) - 1:
-        with scol3:
-            next_status = ORDER_STATUSES[status_idx + 1]
-            if next_status == "delivered":
-                # Delivery is not just a status: it appends the receive line
-                # to the part's history, so it goes through a form, not one
-                # click.
-                if st.button("Advance to DELIVERED ➡", type="primary",
-                             use_container_width=True):
-                    st.session_state["proc_receive_%s" % order_id] = True
-            elif st.button(f"Advance to {next_status.upper()} ➡", type="primary",
-                           use_container_width=True):
-                if client:
-                    update_order(client, order_id, {"Status": next_status})
-                    st.rerun()
-
-if st.session_state.get("proc_receive_%s" % order_id):
-    st.markdown("#### 📥 Receive goods")
-    st.caption("Writes the receive line to **%s**'s history in the project "
-               "record — same order id as the raise line, received quantity, "
-               "courier, and who holds the parts now." % (mcode or "?"))
-    with st.form("receive_form_%s" % order_id):
-        r1, r2 = st.columns(2)
-        with r1:
-            try:
-                _qty_default = int(float(order.get("Quantity", 1) or 1))
-            except (TypeError, ValueError):
-                _qty_default = 1
-            qty_rec = st.number_input("Qty received", min_value=0,
-                                      value=_qty_default, step=1)
-            received_by = st.text_input("Received by (To)",
-                                        value=order.get("Recipient", ""))
-            received_from = st.text_input("From (vendor / sender)",
-                                          value=order.get("Vendor", ""))
-        with r2:
-            courier = st.text_input("Courier / Tracking",
-                                    value=order.get("TrackingNum", ""))
-            rec_date = st.date_input("Date received",
-                                     value=datetime.now().date())
-            rec_note = st.text_input("Note",
-                                     placeholder="e.g. Arrived, QC pending")
-        b_ok, b_cancel = st.columns(2)
-        confirm_receive = b_ok.form_submit_button(
-            "✅ Receive & mark DELIVERED", type="primary")
-        cancel_receive = b_cancel.form_submit_button("Cancel")
-    if cancel_receive:
-        st.session_state.pop("proc_receive_%s" % order_id, None)
-        st.rerun()
-    if confirm_receive:
-        if not record_id:
-            st.error("No project record registered for '%s' — the receive "
-                     "line has nowhere to go." % (project_name or "?"))
-        elif not mcode:
-            st.error("This order has no Part ID, so it cannot be filed "
-                     "against a part tab.")
-        elif not received_by.strip():
-            st.error("Received by is empty — a receipt that names nobody "
-                     "records nothing.")
-        else:
-            now = datetime.now()
-            ok, message = tracker_writer.write_receipt(
-                mcode, order_id=order_id,
-                qty_ordered=str(order.get("Quantity", "")),
-                qty_received=str(qty_rec),
-                received_from=received_from.strip(),
-                holder=received_by.strip(),
-                courier=courier.strip(),
-                date=rec_date.strftime("%d %b %Y"),
-                version=order.get("Version", ""),
-                eta=order.get("ETA", ""),
-                note=rec_note.strip()
-                or ("received %s" % rec_date.strftime("%d %b %Y")),
-                logged_by=user.get("email", "") or user.get("name", ""),
-                logged_at=now.strftime("%d %b %Y %H:%M"),
-                sheet_id=record_id)
-            if ok:
-                # Goods arriving ARE stock arriving. Until 19 Aug this flow
-                # wrote the part's history and stopped, so a delivery never
-                # reached the count — `Receipt` is `stock: "in"` in the event
-                # table and the code simply never asked it.
-                stock_note = ""
-                if int(qty_rec) > 0:
-                    res = stock_store.record_movement(
-                        mcode, project_name, int(qty_rec),
-                        received_by.strip(), received_from.strip(),
-                        event="Receipt",
-                        description=order.get("PartName", ""),
-                        part_type=order.get("Process", ""),
-                        notes=rec_note.strip(), courier=courier.strip(),
-                        build=order.get("Version", ""),
-                        date=rec_date.strftime("%d %b %Y"),
-                        logged_by=user.get("email", "")
-                        or user.get("name", ""))
-                    stock_note = ("" if res.get("ok") else
-                                  " The stock count was NOT updated: %s"
-                                  % res.get("problem", "unknown error"))
-                if client:
-                    updates = {"Status": "delivered"}
-                    if courier.strip():
-                        updates["TrackingNum"] = courier.strip()
-                    update_order(client, order_id, updates)
-                parts_tracker.refresh(record_id)
-                # The Overview is derived — recompute it so the edit shows
-                # everywhere immediately, not only on the part tab.
-                ov = record_builder.write_overview(
-                    project_name, user.get("email", "") or user.get("name", ""),
-                    sheet_id=record_id, replace=True)
-                if ov.get("problem"):
-                    st.warning("Overview not refreshed: %s" % ov["problem"])
-                st.session_state.pop("proc_receive_%s" % order_id, None)
-                flash("warning" if stock_note else "success",
-                      message + stock_note)
-                st.rerun()
-            else:
-                st.error(message)
-
-# --- Cancel: a ledger event, not a deletion (Hamid, 18 Aug — moved here
-# from the old My Orders cards, which could only cancel "new" orders) ---
-if status not in ("delivered", "cancelled"):
-    if st.button("🚫 Cancel this order…"):
-        st.session_state["proc_cancel_%s" % order_id] = True
-
-if st.session_state.get("proc_cancel_%s" % order_id):
-    st.markdown("#### 🚫 Cancel order")
-    st.caption("Writes a **Cancelled** line to %s's history in the project "
-               "record and marks the Orders row cancelled. Nothing is "
-               "deleted — the ledger keeps the whole story."
-               % (mcode or "this part"))
-    with st.form("cancel_form_%s" % order_id):
-        cancel_reason = st.text_input(
-            "Reason (goes into the ledger's Notes)",
-            placeholder="e.g. superseded by new design / duplicate / vendor dropped")
-        c_ok, c_no = st.columns(2)
-        confirm_cancel = c_ok.form_submit_button("🚫 Confirm cancel",
-                                                 type="primary")
-        keep_order = c_no.form_submit_button("Keep order")
-    if keep_order:
-        st.session_state.pop("proc_cancel_%s" % order_id, None)
-        st.rerun()
-    if confirm_cancel:
-        if not record_id:
-            st.error("No project record registered for '%s' — the Cancelled "
-                     "line has nowhere to go." % (project_name or "?"))
-        elif not mcode:
-            st.error("This order has no Part ID, so it cannot be filed "
-                     "against a part tab.")
-        else:
-            now = datetime.now()
-            ok, message = tracker_writer.append_history(mcode, {
-                "event": "Cancelled",
-                "date": now.strftime("%d %b %Y"),
-                "order_id": order_id,
-                "version": order.get("Version", ""),
-                "logged_by": user.get("email", "") or user.get("name", ""),
-                "logged_at": now.strftime("%d %b %Y %H:%M"),
-                "notes": cancel_reason.strip() or "cancelled",
-            }, sheet_id=record_id)
-            if ok:
-                if client:
-                    update_order(client, order_id, {"Status": "cancelled"})
-                parts_tracker.refresh(record_id)
-                ov = record_builder.write_overview(
-                    project_name, user.get("email", "") or user.get("name", ""),
-                    sheet_id=record_id, replace=True)
-                if ov.get("problem"):
-                    st.warning("Overview not refreshed: %s" % ov["problem"])
-                st.session_state.pop("proc_cancel_%s" % order_id, None)
-                flash("success",
-                      "Order %s cancelled — Cancelled line written to %s."
-                      % (order_id, mcode))
-                st.rerun()
-            else:
-                st.error(message)
-
-st.markdown("---")
+# The Status buttons, the guided Cancel and the Advance-to-DELIVERED door
+# lived here until 28 Aug (Hamid: "we dont need these red marks"). Advancing
+# and reverting the stored status stays on the All Orders cards; cancelling
+# is the Cancelled event on Add history entry; Receive goods — the one of
+# the three that writes the LEDGER — moved into the entry picker below.
 
 # --- Order details ---
 st.subheader("Order Details")
@@ -591,7 +399,7 @@ st.subheader("📜 Add history entry")
 
 _entry_kind = st.radio(
     "What are you recording?",
-    ["📜 History entry", "💰 Costs"],
+    ["📜 History entry", "📥 Receive goods", "💰 Costs"],
     horizontal=True, key="proc_entry_kind", label_visibility="collapsed")
 
 if _entry_kind.endswith("History entry"):
@@ -658,9 +466,12 @@ if _entry_kind.endswith("History entry"):
         if add_entry:
             h_from = (h_from_typed.strip() or h_from_pick).strip()
             h_to = (h_to_typed.strip() or h_to_pick).strip()
-            if not h_to and not h_from:
-                st.error("From or To is needed — an entry that names nobody "
-                         "records nothing.")
+            # Only a STOCK-MOVING entry has to name somebody — a Cancelled,
+            # QC, Update or Hold line legitimately names nobody (28 Aug;
+            # the old blanket guard would have blocked every cancellation).
+            if config.moves_stock(h_event) and not h_to and not h_from:
+                st.error("From or To is needed — a stock-moving entry that "
+                         "names nobody records nothing.")
                 st.stop()
             # A typed name reaches the directory FIRST (Hamid: "make sure
             # the vendor will be recorded ... before user submits it") — if
@@ -739,6 +550,103 @@ if _entry_kind.endswith("History entry"):
                         message + stock_note)
                 else:
                     st.error(message)
+
+elif _entry_kind.endswith("Receive goods"):
+    # THE receive flow — was reached through "Advance to DELIVERED" until
+    # 28 Aug; now a branch of the one entry point. Same writes as ever:
+    # the paired receive line (write_receipt), the movement log + count
+    # (record_movement), Status=delivered and the tracking sync.
+    st.caption("Writes the receive line to **%s**'s history in the project "
+               "record — same order id as the raise line, received quantity, "
+               "courier, and who holds the parts now." % (mcode or "?"))
+    with st.form("receive_form_%s" % order_id):
+        r1, r2 = st.columns(2)
+        with r1:
+            try:
+                _qty_default = int(float(order.get("Quantity", 1) or 1))
+            except (TypeError, ValueError):
+                _qty_default = 1
+            qty_rec = st.number_input("Qty received", min_value=0,
+                                      value=_qty_default, step=1)
+            received_by = st.text_input("Received by (To)",
+                                        value=order.get("Recipient", ""))
+            received_from = st.text_input("From (vendor / sender)",
+                                          value=order.get("Vendor", ""))
+        with r2:
+            courier = st.text_input("Courier / Tracking",
+                                    value=order.get("TrackingNum", ""))
+            rec_date = st.date_input("Date received",
+                                     value=datetime.now().date())
+            rec_note = st.text_input("Note",
+                                     placeholder="e.g. Arrived, QC pending")
+        confirm_receive = st.form_submit_button(
+            "✅ Receive & mark DELIVERED", type="primary")
+    if confirm_receive:
+        if not record_id:
+            st.error("No project record registered for '%s' — the receive "
+                     "line has nowhere to go." % (project_name or "?"))
+        elif not mcode:
+            st.error("This order has no Part ID, so it cannot be filed "
+                     "against a part tab.")
+        elif not received_by.strip():
+            st.error("Received by is empty — a receipt that names nobody "
+                     "records nothing.")
+        else:
+            now = datetime.now()
+            ok, message = tracker_writer.write_receipt(
+                mcode, order_id=order_id,
+                qty_ordered=str(order.get("Quantity", "")),
+                qty_received=str(qty_rec),
+                received_from=received_from.strip(),
+                holder=received_by.strip(),
+                courier=courier.strip(),
+                date=rec_date.strftime("%d %b %Y"),
+                version=order.get("Version", ""),
+                eta=order.get("ETA", ""),
+                note=rec_note.strip()
+                or ("received %s" % rec_date.strftime("%d %b %Y")),
+                logged_by=user.get("email", "") or user.get("name", ""),
+                logged_at=now.strftime("%d %b %Y %H:%M"),
+                sheet_id=record_id)
+            if ok:
+                # Goods arriving ARE stock arriving. Until 19 Aug this flow
+                # wrote the part's history and stopped, so a delivery never
+                # reached the count — `Receipt` is `stock: "in"` in the event
+                # table and the code simply never asked it.
+                stock_note = ""
+                if int(qty_rec) > 0:
+                    res = stock_store.record_movement(
+                        mcode, project_name, int(qty_rec),
+                        received_by.strip(), received_from.strip(),
+                        event="Receipt",
+                        description=order.get("PartName", ""),
+                        part_type=order.get("Process", ""),
+                        notes=rec_note.strip(), courier=courier.strip(),
+                        build=order.get("Version", ""),
+                        date=rec_date.strftime("%d %b %Y"),
+                        logged_by=user.get("email", "")
+                        or user.get("name", ""))
+                    stock_note = ("" if res.get("ok") else
+                                  " The stock count was NOT updated: %s"
+                                  % res.get("problem", "unknown error"))
+                if client:
+                    updates = {"Status": "delivered"}
+                    if courier.strip():
+                        updates["TrackingNum"] = courier.strip()
+                    update_order(client, order_id, updates)
+                parts_tracker.refresh(record_id)
+                # The Overview is derived — recompute it so the edit shows
+                # everywhere immediately, not only on the part tab.
+                ov = record_builder.write_overview(
+                    project_name, user.get("email", "") or user.get("name", ""),
+                    sheet_id=record_id, replace=True)
+                if ov.get("problem"):
+                    st.warning("Overview not refreshed: %s" % ov["problem"])
+                flash("warning" if stock_note else "success",
+                      message + stock_note)
+                st.rerun()
+            else:
+                st.error(message)
 
 else:   # 💰 Costs
     def _to_float(v):
