@@ -64,6 +64,16 @@ BAD = (OVERDUE, UNTRACKED, SHORT)
 MOVING = (IN_TRANSIT, OVERDUE, UNTRACKED, SHIPPED)
 CLOSED = (DELIVERED, CANCELLED)
 
+# ONE legend for every colour-coded table in the app, kept beside the palette
+# it describes (Hamid, 24 Aug — the same words on every page, verbatim).
+LEGEND = (
+    "🟩 light green — open: ordered, shipped or in transit · "
+    "🟧 orange — what the sender still holds after a part shipment "
+    "· 🟢 green — delivered · ⬜ grey — cancelled · "
+    "🟥 red — the ETA on a consignment has passed, the leg has "
+    "neither tracking nor ETA, or a sender's count went negative."
+)
+
 COLUMNS = ["Project", "M-Code", "Part", "Version", "Owner", "Qty", "Received",
            "On hand", "From", "From location", "Heading to", "Date", "Courier",
            "Tracking", "ETA / arrived", "Status", "Logged by", "Attention"]

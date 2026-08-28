@@ -553,9 +553,8 @@ with tab_table:
         % ("".join("<th>%s</th>" % h for h in _heads), "".join(_body)),
         unsafe_allow_html=True)
 
+    st.caption(overview_board.LEGEND)
     st.caption(
-        "🟩 light green — open: new, processing, ordered or shipped "
-        "· 🟢 green — delivered · ⬜ grey — cancelled. "
         "The M-Code opens the part on **Part Detail** in one click. Statuses "
         "are reconciled with the part ledger: a receipt on the sheet moves "
         "an order forward even before anyone updates the Orders tab."

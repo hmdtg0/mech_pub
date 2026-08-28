@@ -93,12 +93,7 @@ for column in ("Qty", "Received", "On hand"):
 st.dataframe(table.style.apply(_paint, axis=1), hide_index=True,
              height=ui.table_height(len(rows)), use_container_width=True)
 
-st.caption(
-    "🟩 light green — open: ordered, shipped or in transit · 🟧 orange — what "
-    "the sender still holds after a part shipment · 🟢 green — delivered · "
-    "⬜ grey — cancelled · 🟥 red — the ETA on a consignment has passed, the "
-    "leg has neither tracking nor ETA, or a sender's count went negative."
-)
+st.caption(overview_board.LEGEND)
 st.caption(
     "One row per **order thread**, so a part with seven orders has seven "
     "rows; movements and what stayed behind follow its orders. **Date** is "
