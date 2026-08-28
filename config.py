@@ -172,10 +172,13 @@ TAB_BOM_LIFECYCLE = "Parts and Order Tracking"   # titled "Parts Lifecycle & Ord
 TAB_BOM_MOVEMENTS = "Parts and Samples Movement Log"
 
 # --- Order statuses ---
-ORDER_STATUSES = ["new", "processing", "ordered", "shipped", "delivered"]
+# "processing" left the ladder on 28 Aug 2026 (Hamid: "too many unnecessary
+# stuffs") — an order is new until it is ordered. Rows written before that
+# keep their sheet cell untouched; orders_store reads a stored "processing"
+# as "new".
+ORDER_STATUSES = ["new", "ordered", "shipped", "delivered"]
 STATUS_COLORS = {
     "new": "gray",
-    "processing": "blue",
     "ordered": "orange",
     "shipped": "violet",
     "delivered": "green",
@@ -195,13 +198,11 @@ PROCESS_OPTIONS = [
     "Other",
 ]
 
-# Processes that involve tooling/DFM review before production. Orders raised
-# from a BOM carry the BOM's own `Type` here rather than a manufacturing
-# process — "Moulding" is that vocabulary's word for the same thing, and
-# without it a moulded part silently loses its DFM checklist items.
-MOLDING_PROCESSES = {"Injection Molding", "Silicone / Casting", "Moulding"}
-
 # --- Orders tab column headers (auto-created on first run) ---
+# ChecklistJSON stays in this list although the checklist FEATURE was removed
+# (28 Aug 2026): the live sheet has the column, and rows are written
+# positionally against these headers — dropping it would shift every value
+# after it into the wrong column. New rows write it blank.
 # PartID/Version follow the NPD team's part-identity convention:
 # M-code matches the BOM numbering (e.g. M107), Version is
 # Major(CAD).Minor(tolerance/tooling).Batch — e.g. 2.1.1.

@@ -5,7 +5,6 @@ of the merged Overview page (Hamid: "less pages to track"). Everything the
 page did lives here unchanged — render(user) draws it; the shell page owns
 auth, the title and the Board/Orders switch.
 """
-import json
 from datetime import datetime
 
 import streamlit as st
@@ -21,8 +20,8 @@ from config import ORDER_STATUSES, STATUS_COLORS, CNY_TO_GBP
 
 
 STATUS_ACTIONS = {
-    "new": ("🔧 Start Processing", "processing"),
-    "processing": ("📦 Mark as Ordered", "ordered"),
+    # "processing" left the ladder 28 Aug — an order is new until ordered.
+    "new": ("📦 Mark as Ordered", "ordered"),
     "ordered": ("🚚 Mark as Shipped", "shipped"),
     "shipped": ("✅ Mark as Delivered", "delivered"),
 }
@@ -102,24 +101,14 @@ def order_card(order_id: str, user_name: str, progress: str = "",
     quantity = order.get("Quantity", "")
     created = order.get("CreatedAt", "")
 
-    # Parse checklist
-    try:
-        checklist = json.loads(order.get("ChecklistJSON", "[]"))
-    except (json.JSONDecodeError, TypeError):
-        checklist = []
-
-    done_count = sum(1 for c in checklist if c.get("done"))
-    total_count = len(checklist) or 1
-    pct = done_count / total_count
-
     priority_icon = "🔴" if priority == "URGENT" else "🟢"
     status_color = STATUS_COLORS.get(status, "gray")
 
     _proj = (order.get("Project") or "").strip()
     # The header follows the tracker cards' shape (Hamid, 24 Aug: "the labels
     # need these info" — part identity, version, received progress, recipient),
-    # keeping the app half: the status chip and the engineer. Process, qty and
-    # the checklist live inside the card, where they always were.
+    # keeping the app half: the status chip and the engineer. Process and qty
+    # live inside the card, where they always were.
     header = " | ".join(
         [f"{priority_icon} "
          + (f"{project_colors.tag(_proj)} " if _proj else "")
@@ -165,8 +154,6 @@ def order_card(order_id: str, user_name: str, progress: str = "",
             total_gbp = total_cny * CNY_TO_GBP
             st.markdown(f"💰 **Cost:** Parts ¥{parts_c:.0f} + Shipping ¥{ship_c:.0f} = **¥{total_cny:,.2f} CNY (£{total_gbp:,.2f} GBP)**")
 
-        st.progress(pct)
-
         if thread:
             ledger_block(thread, "open_%s" % order_id)
 
@@ -182,17 +169,9 @@ def order_card(order_id: str, user_name: str, progress: str = "",
             with ef1:
                 new_vendor = st.text_input("Vendor", value=order.get("Vendor", ""), key=f"vendor_{order_id}")
                 new_vendor_num = st.text_input("Vendor Order #", value=order.get("VendorOrderNum", ""), key=f"vendornum_{order_id}")
+            with ef2:
                 new_tracking = st.text_input("Tracking #", value=order.get("TrackingNum", ""), key=f"tracking_{order_id}")
                 new_eta_date = st.date_input("ETA", value=eta_default, key=f"eta_{order_id}")
-            with ef2:
-                st.markdown("**Checklist:**")
-                new_done = []
-                for j, item in enumerate(checklist):
-                    new_done.append(st.checkbox(
-                        item.get("text", ""),
-                        value=item.get("done", False),
-                        key=f"chk_{order_id}_{item.get('id', j)}",
-                    ))
             new_notes = st.text_area("Notes", value=order.get("Notes", ""), key=f"notes_{order_id}", height=160)
             saved = st.form_submit_button("💾 Save Changes", type="primary")
 
@@ -209,13 +188,6 @@ def order_card(order_id: str, user_name: str, progress: str = "",
                 payload["ETA"] = new_eta
             if new_notes != order.get("Notes", ""):
                 payload["Notes"] = new_notes
-            cl_changed = False
-            for item, v in zip(checklist, new_done):
-                if v != item.get("done", False):
-                    item["done"] = v
-                    cl_changed = True
-            if cl_changed:
-                payload["ChecklistJSON"] = json.dumps(checklist, ensure_ascii=False)
             if payload:
                 update_order(client, order_id, payload)
                 st.success("Saved!")
@@ -495,7 +467,6 @@ def render(user) -> None:
         # (Hamid, 28 Aug); its M-Code links open Part Detail in a new tab.
         _paint_by = {
             "new": overview_board.COLOURS[overview_board.ORDERED],
-            "processing": overview_board.COLOURS[overview_board.ORDERED],
             "ordered": overview_board.COLOURS[overview_board.ORDERED],
             "shipped": overview_board.COLOURS[overview_board.SHIPPED],
             "delivered": overview_board.COLOURS[overview_board.DELIVERED],

@@ -5,7 +5,6 @@ each row carries a Project column. Project sheets never get an Orders tab.
 """
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime
 
@@ -14,7 +13,7 @@ from gspread.utils import rowcol_to_a1
 
 from config import CENTRAL_SHEET_ID, TAB_ORDERS, ORDERS_HEADERS
 from utils import data_cache, settings
-from utils.models import Order, generate_checklist
+from utils.models import Order
 from utils.google_client import with_worksheet
 
 # TTL is a runtime setting (Status page), not a constant.
@@ -56,7 +55,16 @@ def _parse_rows(ws: gspread.Worksheet) -> list[dict]:
 
 def _load_orders() -> list[dict]:
     result = _on_orders_ws(_parse_rows)
-    return result if result is not None else []
+    rows = result if result is not None else []
+    for o in rows:
+        # "processing" left the status ladder (28 Aug 2026). Rows written
+        # before that keep their sheet cell untouched; the app reads them
+        # as "new" — the order has not been placed yet, which is what
+        # "processing" meant. Normalised HERE, before the cache, so every
+        # consumer (desk, My Orders, Process Order) sees one vocabulary.
+        if str(o.get("Status", "")).strip().lower() == "processing":
+            o["Status"] = "new"
+    return rows
 
 
 def fetch_all_orders() -> list[dict]:
@@ -146,7 +154,6 @@ def _order_row(order_data: dict) -> tuple:
     order_id = str(uuid.uuid4())[:8]
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    # Build Order object for checklist generation
     order = Order(
         part_name=order_data.get("part_name", ""),
         m_code=order_data.get("m_code", ""),
@@ -160,8 +167,6 @@ def _order_row(order_data: dict) -> tuple:
         recipient=order_data.get("recipient", ""),
         engineer=order_data.get("engineer_name", ""),
     )
-    checklist = generate_checklist(order)
-    checklist_json = json.dumps(checklist, ensure_ascii=False)
 
     row = [
         order_id,                                       # OrderID
@@ -185,7 +190,7 @@ def _order_row(order_data: dict) -> tuple:
         order_data.get("eta", ""),                       # ETA
         order_data.get("notes", ""),                    # Notes
         order_data.get("drive_file_link", ""),           # DriveFileLink
-        checklist_json,                                 # ChecklistJSON
+        "",                                             # ChecklistJSON (column kept for row shape; feature removed 28 Aug)
         order.inspection,                               # Inspection
         "",                                             # PartsCostCNY
         "",                                             # ShippingCostCNY
@@ -289,17 +294,3 @@ def update_order(client: gspread.Client, order_id: str, updates: dict):
             )
 
     _on_orders_ws(_do)
-
-
-def update_checklist(client: gspread.Client, order_id: str, checklist: list[dict]):
-    """Update the checklist JSON for an order."""
-    from utils.auth import impersonation_block
-    blocked = impersonation_block()
-    if blocked:
-        # A clean stop, not an exception: the cloud redacts tracebacks into
-        # noise, and "why can't I save" deserves a sentence, not a stack.
-        import streamlit as st
-        st.error(blocked)
-        st.stop()
-    checklist_json = json.dumps(checklist, ensure_ascii=False)
-    update_order(client, order_id, {"ChecklistJSON": checklist_json})

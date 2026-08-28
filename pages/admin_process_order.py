@@ -7,17 +7,13 @@ line (the reference record's second line of the pair); anything else worth
 recording goes in through "Add history entry". Overview, Parts, Movements
 and the rest read that history, so this page is where their data comes from.
 """
-import json
-
 import pandas as pd
 import streamlit as st
 
 from datetime import datetime
 from utils.auth import require_role
 from utils.google_client import get_gspread_client
-from utils.orders_store import (
-    fetch_all_orders, update_order, update_checklist,
-)
+from utils.orders_store import fetch_all_orders, update_order
 from utils import (holders_store, parts_tracker, project_colors,
                    project_registry, record_builder, stock_store,
                    tracker_orders, tracker_writer, ui)
@@ -144,7 +140,7 @@ def order_facts(o):
             owner, eta, detail)
 
 
-status_icons = {"new": "⚪", "processing": "🔵", "ordered": "🟠",
+status_icons = {"new": "⚪", "ordered": "🟠",
                 "shipped": "🟣", "delivered": "🟢", "cancelled": "🚫"}
 selected_order_id = None
 
@@ -583,7 +579,9 @@ if drive_link:
 st.markdown("---")
 
 # --- Admin editable fields ---
-st.subheader("Processing")
+# Was headed "Processing" — renamed when the processing status left the
+# ladder (28 Aug); the FIELDS stay, per Hamid's "keep all fields".
+st.subheader("Order info")
 with st.form("process_form"):
     pcol1, pcol2 = st.columns(2)
     with pcol1:
@@ -604,7 +602,7 @@ with st.form("process_form"):
         notes = st.text_area("Notes", value=order.get("Notes", ""), height=200,
                              key="proc_notes_%s" % order_id)
 
-    if st.form_submit_button("Save Processing Info", type="primary"):
+    if st.form_submit_button("Save Order Info", type="primary"):
         if client:
             updates = {}
             if vendor != order.get("Vendor", ""):
@@ -619,7 +617,7 @@ with st.form("process_form"):
                 updates["Notes"] = notes
             if updates:
                 update_order(client, order_id, updates)
-                flash("success", "Processing info saved.")
+                flash("success", "Order info saved.")
                 st.rerun()
             else:
                 st.info("No changes to save.")
@@ -663,36 +661,6 @@ with st.form("cost_form"):
                 st.rerun()
             else:
                 st.info("No changes.")
-
-st.markdown("---")
-
-# --- Checklist ---
-st.subheader("Checklist")
-try:
-    checklist = json.loads(order.get("ChecklistJSON", "[]"))
-except (json.JSONDecodeError, TypeError):
-    checklist = []
-
-if checklist:
-    checklist_changed = False
-    for item in checklist:
-        new_val = st.checkbox(
-            item.get("text", ""),
-            value=item.get("done", False),
-            key=f"proc_chk_{order_id}_{item.get('id', '')}",
-        )
-        if new_val != item.get("done", False):
-            item["done"] = new_val
-            checklist_changed = True
-
-    if checklist_changed:
-        if st.button("💾 Save Checklist", type="primary"):
-            if client:
-                update_checklist(client, order_id, checklist)
-                flash("success", "Checklist saved.")
-                st.rerun()
-else:
-    st.info("No checklist items.")
 
 st.markdown("---")
 

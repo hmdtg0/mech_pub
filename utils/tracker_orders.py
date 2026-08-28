@@ -70,8 +70,10 @@ def derived_status(history) -> str:
     Process Order and the Overview's Latest status column (Hamid, 18 Aug):
     a receive line ⇒ delivered; a Cancelled event ⇒ cancelled (unless goods
     actually arrived — delivery is stronger truth); courier without a
-    receipt ⇒ shipped; a raise line ⇒ ordered; any history ⇒ processing.
-    A LATER raise resets the slate: reordering after a cancel starts over.
+    receipt ⇒ shipped; a raise line ⇒ ordered; history without a raise ⇒
+    new — nothing has been ordered yet ("processing" left the ladder,
+    28 Aug). A LATER raise resets the slate: reordering after a cancel
+    starts over.
     """
     origin_idx = None
     for i, row in enumerate(history):
@@ -80,7 +82,7 @@ def derived_status(history) -> str:
                 and to_int(row.get("qty_received", "")) == 0):
             origin_idx = i
     if origin_idx is None:
-        return "processing" if history else ""
+        return "new" if history else ""
     after = history[origin_idx:]
     if any(tracker_parse.event_of(r).lower()
            == tracker_parse.EVENT_ORDER.lower()
@@ -442,6 +444,12 @@ def effective_status(stored: str, derived: str) -> str:
     """
     stored = (stored or "").strip().lower()
     derived = (derived or "").strip().lower()
+    # Legacy vocabulary: "processing" left the ladder 28 Aug. orders_store
+    # normalises at fetch; this catches any caller that arrives raw.
+    if stored == "processing":
+        stored = "new"
+    if derived == "processing":
+        derived = "new"
     if derived == "delivered":
         return "delivered"
     if "cancelled" in (stored, derived):
