@@ -1,4 +1,4 @@
-"""Overview — the admin's one page: the board, and the orders desk.
+"""All Orders — the admin's one page: the board, and the orders desk.
 
 🗺 Board: every part, every order thread, and everything moving — the
 screen that answers "where does this part stand". 📦 Orders: every order
@@ -24,7 +24,7 @@ from utils import (movements_store, orders_desk, overview_board,
 
 user = require_role("admin", "engineer", "logistics")
 
-st.title("📊 Overview")
+st.title("📊 All Orders")
 
 _view = st.radio("View", ["🗺 Board", "📦 Orders"], horizontal=True,
                  key="ov_view", label_visibility="collapsed")

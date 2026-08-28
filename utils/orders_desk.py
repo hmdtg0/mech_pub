@@ -461,9 +461,11 @@ def render(user) -> None:
     st.markdown(" · ".join(_bits))
     st.markdown("---")
 
-    # --- Two views of the same filtered list: cards, one row per order ------
-    tab_cards, tab_table = st.tabs(["🗂 Cards (%d)" % len(view),
-                                    "📋 Table View (%d)" % len(view)])
+    # --- Two views of the same filtered list: table first — the DEFAULT
+    # (Hamid, 28 Aug: "default the table view in orders tab"; st.tabs always
+    # opens on its first tab, so order IS the default) — and the cards.
+    tab_table, tab_cards = st.tabs(["📋 Table View (%d)" % len(view),
+                                    "🗂 Cards (%d)" % len(view)])
 
     with tab_cards:
         MAX_SHOW = 20

@@ -84,11 +84,12 @@ logistics_pages = [
 # st.navigation does not register is unreachable no matter what the page
 # itself would allow: the nav list IS the outer gate, and the two must agree.
 work_pages = [
-    # Overview is the landing page: the one screen that answers "where does
-    # everything stand" (Hamid, 21 Aug). Since 28 Aug it also carries the
-    # orders desk (the old All Orders page) behind its Board/Orders switch —
-    # "less pages to track".
-    st.Page("pages/admin_overview.py", title="Overview", icon="🗂", default=True),
+    # The landing page — named "All Orders" (Hamid, 28 Aug), one screen with
+    # a Board/Orders switch: the board that answers "where does everything
+    # stand" plus the orders desk. The merge and the name both serve "less
+    # pages to track". The FILE stays admin_overview.py so the URL and the
+    # tier-1 revert path (git revert 524004c) stay stable.
+    st.Page("pages/admin_overview.py", title="All Orders", icon="📊", default=True),
     st.Page("pages/admin_process_order.py", title="Process Order", icon="🔧"),
 ]
 
