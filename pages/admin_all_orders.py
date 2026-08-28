@@ -7,8 +7,8 @@ import streamlit as st
 
 from utils.auth import require_role
 from utils.google_client import get_gspread_client
-from utils import (overview_board, project_colors, tracker_order_ui,
-                   tracker_orders, ui)
+from utils import (overview_board, project_colors, project_registry,
+                   tracker_order_ui, tracker_orders, ui)
 from utils.orders_store import (
     fetch_all_orders, fetch_order_by_id, update_order,
 )
