@@ -6,8 +6,6 @@ things being chased are vendor orders and parts in transit rather than PCBs
 and components — and it also surfaces the project tracker's open deliveries
 and movement log, read-only.
 """
-from datetime import datetime
-
 import streamlit as st
 
 
@@ -18,7 +16,7 @@ from utils.auth import require_auth
 from utils.google_client import get_gspread_client
 from utils.orders_store import fetch_all_orders, update_order
 from utils import (parts_model, parts_tracker, project_colors,
-                   project_registry, ui)
+                   project_registry, tracker_orders, ui)
 from utils.tracker_parse import to_int
 
 user = require_auth()
@@ -48,14 +46,33 @@ def _ptag(o: dict) -> str:
     return "%s " % project_colors.tag(name) if name and _multi_project else ""
 
 # --- Order categories ---
-# Ordered but no tracking number yet -> waiting to leave the vendor.
-awaiting_dispatch = [o for o in orders
-                     if o.get("Status") == "ordered" and not (o.get("TrackingNum") or "").strip()]
-# On the way -> waiting to be received.
-in_transit = [o for o in orders
-              if o.get("Status") == "shipped"
-              or (o.get("Status") == "ordered" and (o.get("TrackingNum") or "").strip())]
-recently_delivered = [o for o in orders if o.get("Status") == "delivered"]
+# Queue membership uses the RECONCILED status, not the raw Orders-tab cell:
+# the part's history can move an order forward past a lagging cell, never
+# backward — the same effective_status rule every other page applies. This
+# page was the last one reading the cell raw (28 Aug 2026): an order raised
+# on the ledger but not yet advanced by hand showed in no queue at all, and
+# one received on the sheet would have sat in "Awaiting Dispatch" forever.
+_thread_of = {}
+for _t in ui.in_scope(tracker_orders.all_projects_orders()):
+    _oid = str(_t.get("order_id", "")).strip()
+    if _oid:
+        _thread_of[_oid] = _t
+
+awaiting_dispatch, in_transit, recently_delivered = [], [], []
+for _o in orders:
+    _t = _thread_of.get(str(_o.get("OrderID", "")).strip())
+    _status = tracker_orders.effective_status(
+        (_o.get("Status") or "new").strip() or "new",
+        _t.get("derived", "") if _t else "")
+    _tracking = (_o.get("TrackingNum") or "").strip()
+    # Ordered but no tracking number yet -> waiting to leave the vendor.
+    if _status == "ordered" and not _tracking:
+        awaiting_dispatch.append(_o)
+    # On the way -> waiting to be received.
+    elif _status == "shipped" or (_status == "ordered" and _tracking):
+        in_transit.append(_o)
+    elif _status == "delivered":
+        recently_delivered.append(_o)
 
 # --- Tracker categories (read-only) ---
 # One project record per source, read in turn: these two tabs belong to a
@@ -127,40 +144,34 @@ with st.expander(f"📤 **Awaiting Dispatch** ({len(awaiting_dispatch)})", expan
             st.divider()
 
 # ============================================================
-# B. IN TRANSIT — mark received
+# B. IN TRANSIT — read-only; receiving is a Receipt entry
 # ============================================================
 with st.expander(f"📥 **In Transit** ({len(in_transit)})", expanded=False):
     if not in_transit:
         st.success("Nothing in transit!")
     else:
+        # The status-only "Mark Received" button left on 28 Aug 2026: it
+        # closed an order with no receive line, no movement and no count, so
+        # Parts Short kept chasing goods already on the shelf. Receiving is
+        # ONE entry now — Process Order's Receipt event books the goods in
+        # and closes the order in the same submit.
+        st.caption("Arrived? Record it on **Process Order → 📜 Add history "
+                   "entry → Event: Receipt** — that books the goods in and "
+                   "marks the order delivered.")
         for i, o in enumerate(in_transit[:20]):
-            oid = o.get("OrderID", "?")
             part = o.get("PartName", "N/A")
             mcode = (o.get("PartID") or "").strip()
             tracking = (o.get("TrackingNum") or "").strip()
             eta = o.get("ETA", "")
             priority_icon = "🔴" if o.get("Priority") == "URGENT" else "🟢"
 
-            c1, c2, c3 = st.columns([4, 3, 2])
+            c1, c2 = st.columns([3, 2])
             with c1:
                 st.markdown(_ptag(o) + f"{priority_icon} **{part}**" + (f" | `{mcode}`" if mcode else ""))
                 if tracking:
                     st.caption(f"Tracking: {tracking}")
             with c2:
                 st.caption(f"ETA: {eta or 'TBC'} | To: {o.get('Recipient', '')}")
-            with c3:
-                if st.button("✅ Mark Received", key=f"recv_{oid}_{i}") and client:
-                    try:
-                        note = (o.get("Notes") or "").strip()
-                        today = datetime.now().strftime("%Y-%m-%d")
-                        update_order(client, oid, {
-                            "Status": "delivered",
-                            "Notes": (note + f"\nReceived {today} by {user['name']}").strip(),
-                        })
-                        st.toast(f"{part} marked received!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed: {e}")
             st.divider()
 
 # ============================================================
