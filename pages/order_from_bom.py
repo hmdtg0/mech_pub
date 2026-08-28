@@ -26,8 +26,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from utils.auth import require_auth
 from utils import (agent_entry, app_settings, bom_sheet, bulk_orders,
-                   order_drafts, parts_model, parts_tracker, project_colors,
-                   project_registry, tracker_orders)
+                   ofb_state, order_drafts, parts_model, parts_tracker,
+                   project_colors, project_registry, tracker_orders)
 from utils.ui import project_scope, require_single_project, table_height
 
 # Reviewer is deliberately not collected here — deferred to a later phase. The
@@ -46,8 +46,37 @@ if not bom_id:
             "from. An admin can link one on **Tools → Projects**." % project)
     st.stop()
 
-build_tab = bom_sheet.default_build(bom_id)
-bom_rows = bom_sheet.fetch_bom(build_tab, bom_id) if build_tab else []
+# --- The working set: read ONCE per visit, not once per rerun ---------------
+# Every committed grid cell triggers a full rerun, and this page used to pay
+# a drafts sheet read plus a live worksheets() call on each one — seconds of
+# network per cell, during which anything still being typed was thrown away
+# when the grid re-synced. Worse, a cache refresh mid-session could change
+# the open-order filter and shift the row set UNDER the editors' index-keyed
+# edits (Hamid, 28 Aug: "the page refreshes and what I typed is gone").
+# Frozen here for the visit; ↻ Refresh re-reads everything, carrying the
+# grid state across by Part ID. The double-order guard is re-checked against
+# the LIVE ledger at submit time, so freezing loses no safety.
+
+
+def _load_working_set() -> dict:
+    build_tab = bom_sheet.default_build(bom_id)
+    return {
+        "scope": (project, record_id, bom_id),
+        "build_tab": build_tab,
+        "bom_rows": (bom_sheet.fetch_bom(build_tab, bom_id)
+                     if build_tab else []),
+        "have_tabs": set(parts_tracker.part_tabs(record_id)),
+        "status_of": {o["mcode"]: (o.get("derived") or "")
+                      for o in tracker_orders.part_orders(record_id, project)},
+        "drafts": order_drafts.list_drafts(project),
+    }
+
+
+_ws = st.session_state.get("ofb_working")
+if not _ws or _ws.get("scope") != (project, record_id, bom_id):
+    _ws = st.session_state["ofb_working"] = _load_working_set()
+build_tab = _ws["build_tab"]
+bom_rows = _ws["bom_rows"]
 if not bom_rows:
     st.warning("No parts read from the BOM. Check the BOM tab set for this "
                "project on **Tools → Projects**.")
@@ -56,7 +85,12 @@ if not bom_rows:
 project_scope("Every order submitted on this page is filed to THIS "
               "project's record and read from its BOM — check it before a "
               "mass submit, not after.")
-st.markdown("Reading **%d parts** from `%s`." % (len(bom_rows), build_tab))
+_head1, _head2 = st.columns([5, 1.3], vertical_alignment="center")
+_head1.markdown("Reading **%d parts** from `%s`." % (len(bom_rows), build_tab))
+_refresh_clicked = _head2.button(
+    "↻ Refresh", key="ofb_refresh", use_container_width=True,
+    help="Re-read the BOM, order statuses and drafts (they load once per "
+         "visit). Your table entries are kept — matched by Part ID.")
 
 
 def _int(value) -> int:
@@ -108,12 +142,14 @@ if _pending:
 # and submits (Hamid, 19 Aug). Drafts live on the main record's Order Drafts
 # tab — named, visible on the sheet, per project. Nothing about a draft is an
 # order: loading one only fills this page.
-_drafts = order_drafts.list_drafts(project)
+_drafts = _ws["drafts"]
 if st.session_state.get("ofb_loaded_draft"):
     st.info("Working from draft **%s** — submitting will clear it."
             % st.session_state["ofb_loaded_draft"])
 if _drafts:
     with st.expander("📂 Load a saved draft (%d)" % len(_drafts)):
+        st.caption("Listed as of when this page loaded — ↻ Refresh above "
+                   "picks up drafts saved since.")
         _names = sorted(_drafts)
         _pick = st.selectbox(
             "Draft", _names, key="ofb_draft_pick",
@@ -165,6 +201,7 @@ if _drafts:
                 st.error(_why)
             else:
                 st.session_state.pop("ofb_loaded_draft", None)
+                _ws["drafts"] = order_drafts.list_drafts(project)
                 st.rerun()
 
 # ============================================================
@@ -194,17 +231,54 @@ with q4:
     st.caption("**Qty to order = BOM Qty × %d** — every row stays editable "
                "below." % units)
 
+_base_sig = "%s_%s" % (units, eta_date or "")
+
+# ↻ Refresh: re-read the frozen working set WITHOUT losing the typing —
+# the grid state is lifted out by Part ID first, then everything reloads
+# and the editors are re-drawn seeded with it. Parts that got an order on
+# their way since the page loaded leave the grids (the info box below says
+# so); their carried entries simply find no row.
+if _refresh_clicked:
+    _carried = ofb_state.harvest(st.session_state.get("ofb_frames") or {},
+                                 st.session_state)
+    if _carried:
+        st.session_state["ofb_seed"] = {"sig": _base_sig, "rows": _carried}
+    st.session_state["ofb_working"] = _load_working_set()
+    for _k in [k for k in st.session_state if str(k).startswith("ofb_grid_")]:
+        st.session_state.pop(_k, None)
+    st.session_state.pop("ofb_frames", None)
+    st.session_state["ofb_nonce"] = st.session_state.get("ofb_nonce", 0) + 1
+    st.rerun()
+
+# A units/ETA change rebuilds the rows — it must NOT throw the typing away
+# (Hamid, 28 Aug: "the page refreshes and what I typed is gone"). The grid
+# state is carried across by Part ID; cells still on their old §1 defaults
+# follow the NEW units/ETA, explicit edits survive the rebuild. A loaded
+# draft pops ofb_frames before this runs, so its seed is never overwritten.
+_last_base = st.session_state.get("ofb_last_base")
+if (_last_base is not None and _last_base.get("sig") != _base_sig
+        and st.session_state.get("ofb_frames")):
+    _carried = ofb_state.carry_over(
+        ofb_state.harvest(st.session_state["ofb_frames"], st.session_state),
+        _last_base.get("units"), _last_base.get("eta"))
+    if _carried:
+        st.session_state["ofb_seed"] = {"sig": _base_sig, "rows": _carried}
+    for _k in [k for k in st.session_state if str(k).startswith("ofb_grid_")]:
+        st.session_state.pop(_k, None)
+    st.session_state.pop("ofb_frames", None)
+st.session_state["ofb_last_base"] = {"sig": _base_sig, "units": units,
+                                     "eta": eta_date}
+
 # Which parts already have a tab — an order for a part without one cannot be
 # filed against its history, so it is worth saying before the submit fails.
-have_tabs = set(parts_tracker.part_tabs(record_id))
+have_tabs = _ws["have_tabs"]
 
 # Parts whose ledger already has an order ON ITS WAY are shown, not offered
 # (Hamid, 19 Aug: "once it is ordered ... should not be selected"). A second
 # raise for something already travelling is a double count — the exact thing
 # the audit spent a day undoing. Delivered and cancelled parts stay
 # selectable: a reorder is a new batch, not a duplicate.
-_status_of = {o["mcode"]: (o.get("derived") or "")
-              for o in tracker_orders.part_orders(record_id, project)}
+_status_of = _ws["status_of"]
 open_codes = {c for c, st_ in _status_of.items()
               if st_ in ("ordered", "shipped")}
 
@@ -235,9 +309,9 @@ for r in bom_rows:
 # Tick-alls re-seed the grids via a PERSISTENT seed. Every rerun rebuilds
 # `rows` from the BOM, so the saved tick state must be reapplied every run —
 # a one-shot override reset everything on the next unrelated rerun, which
-# was Hamid's "deselecting one selects the others". The seed dies when §1
-# changes, because new units/ETA are meant to rebuild the rows.
-_base_sig = "%s_%s" % (units, eta_date or "")
+# was Hamid's "deselecting one selects the others". A stale-signature seed
+# still dies here, but a §1 change now WRITES a fresh-signature seed first
+# (the carry-over above), so the typing rides across the rebuild.
 _seed = st.session_state.get("ofb_seed")
 if _seed and _seed.get("sig") == _base_sig:
     for row in rows:
@@ -469,17 +543,6 @@ COLUMN_CONFIG = {
 # which needs them on its Apply click.)
 
 
-def _eta_cell(value):
-    """An ETA value from editor state, as something a DateColumn can seed.
-    Committed-but-unrendered edits arrive as ISO strings."""
-    if isinstance(value, str):
-        try:
-            return pd.to_datetime(value).date()
-        except (ValueError, TypeError):
-            return None
-    return value
-
-
 def _tick_group(type_name: str, box_key: str) -> None:
     """Tick or untick every row of one group, keeping EVERY group's edits.
 
@@ -487,26 +550,17 @@ def _tick_group(type_name: str, box_key: str) -> None:
     applied by re-seeding, and the nonce bump re-draws every grid — so the
     override must carry the current rows of ALL groups, not just the clicked
     one, or setting one group silently resets the others (Hamid caught
-    exactly that: deselecting one group re-selected the rest). Each group's
-    own widget state is merged on top of its last-drawn rows, because an
-    edit committed instants before this click has reached that state but not
-    yet a finished run.
+    exactly that: deselecting one group re-selected the rest). The lift-out
+    (last-drawn rows + committed diffs, by Part ID) is ofb_state.harvest —
+    the same carry the ↻ Refresh and §1 rebuilds use.
     """
     ticked = bool(st.session_state.get(box_key))
     frames = st.session_state.get("ofb_frames") or {}
-    seed_rows = {}
-    for group, blob in frames.get("groups", {}).items():
-        state = st.session_state.get(blob.get("key", ""))
-        edited = state.get("edited_rows", {}) if isinstance(state, dict) else {}
-        for i, rec in enumerate(blob.get("rows", [])):
-            rec = dict(rec)
-            for k in (i, str(i)):
-                if k in edited and isinstance(edited[k], dict):
-                    rec.update(edited[k])
-            rec["ETA"] = _eta_cell(rec.get("ETA"))
-            if group == type_name:
-                rec["include"] = ticked
-            seed_rows[str(rec.get("Part ID", ""))] = rec
+    seed_rows = ofb_state.harvest(frames, st.session_state)
+    for rec in (frames.get("groups", {}).get(type_name, {}) or {}).get("rows", []):
+        pid = str(rec.get("Part ID", "")).strip()
+        if pid in seed_rows:
+            seed_rows[pid]["include"] = ticked
     st.session_state["ofb_seed"] = {"sig": frames.get("sig", ""),
                                     "rows": seed_rows}
     st.session_state["ofb_nonce"] += 1
@@ -652,6 +706,7 @@ with d2:
         if _why:
             st.error(_why)
         else:
+            _ws["drafts"] = order_drafts.list_drafts(project)
             st.success("Draft **%s** saved — %d part(s). Anyone can load it "
                        "from 📂 at the top of this page."
                        % (draft_name.strip(), len(chosen)))
@@ -663,6 +718,20 @@ confirmed = st.checkbox(
 if st.button("📤 Submit %d order(s)" % len(chosen), type="primary",
              disabled=bool(problems) or not confirmed, key="ofb_submit"):
     from utils import bulk_orders
+
+    # The page works from a frozen snapshot, so the double-order guard runs
+    # once more against the LIVE ledger at the moment of writing — the only
+    # check that can catch an order raised while this page sat open.
+    parts_tracker.refresh(record_id)
+    _fresh = {o["mcode"]: (o.get("derived") or "")
+              for o in tracker_orders.part_orders(record_id, project)}
+    _late = [c["m_code"] for c in chosen
+             if _fresh.get(c["m_code"]) in ("ordered", "shipped")]
+    if _late:
+        st.error("Not submitted — %d part(s) got an order on its way while "
+                 "this page was open: %s. ↻ Refresh at the top and review."
+                 % (len(_late), ", ".join("`%s`" % c for c in _late[:8])))
+        st.stop()
 
     with st.spinner("Writing %d order(s)…" % len(chosen)):
         result = bulk_orders.submit(
@@ -686,6 +755,9 @@ if st.button("📤 Submit %d order(s)" % len(chosen), type="primary",
             st.session_state.pop("ofb_grid_%s_%s" % (type_name, _signature), None)
         st.session_state.pop("ofb_frames", None)
         st.session_state.pop("ofb_seed", None)
+        # The frozen working set is stale by exactly these orders — drop it
+        # so the next run re-reads and the submitted parts leave the grids.
+        st.session_state.pop("ofb_working", None)
         st.session_state["ofb_nonce"] += 1
         # The Overview is derived from the part tabs — recompute so the new
         # raise lines show there immediately.
