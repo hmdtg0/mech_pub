@@ -12,6 +12,7 @@ from utils.auth import require_auth
 from utils import (bom_sheet, holders_store, parts_model, parts_tracker,
                    project_colors, project_registry, stock_store,
                    tracker_writer)
+from utils import user_store
 from utils.orders_store import fetch_orders_for_part
 from utils.tracker_parse import (is_selected, order_origin, order_recipient,
                                  to_int)
@@ -297,7 +298,8 @@ if _bom_id:
             "Version": m.get("version", ""), "Qty": m.get("qty", ""),
             "From": m.get("from", ""), "To": m.get("to", ""),
             "Shipped": m.get("date_shipped", ""), "Received": m.get("date_received", ""),
-            "Logged by": m.get("logged_by", ""), "Status": m.get("status", ""),
+            "Logged by": user_store.name_of(m.get("logged_by", "")),
+            "Status": m.get("status", ""),
             "Courier / Tracking": m.get("courier", ""), "Notes": m.get("notes", ""),
         } for m in bom_moves]), use_container_width=True, hide_index=True,
             height=table_height(len(bom_moves)))

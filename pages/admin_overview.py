@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.auth import require_role
 from utils import (movements_store, overview_board, parts_tracker,
                    project_colors, project_registry, shipments_store,
-                   stock_store, ui)
+                   stock_store, ui, user_store)
 
 require_role("admin", "engineer", "logistics")
 
@@ -83,9 +83,12 @@ st.markdown("**Projects** — " + " ".join(
 # an anchor at all.)
 _cells, _bg = [], []
 for r in rows:
-    _cells.append([ui.part_link(r["Project"], r["M-Code"])
-                   if col == "M-Code" else ui.esc(r.get(col, ""))
-                   for col in overview_board.COLUMNS])
+    _cells.append([
+        ui.part_link(r["Project"], r["M-Code"]) if col == "M-Code"
+        # The sheet keeps the email; the screen shows the person.
+        else ui.esc(user_store.name_of(r.get(col, ""))) if col == "Logged by"
+        else ui.esc(r.get(col, ""))
+        for col in overview_board.COLUMNS])
     _bg.append(overview_board.COLOURS.get(r["Status"], ""))
 ui.linked_table(overview_board.COLUMNS, _cells, _bg)
 

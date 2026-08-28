@@ -105,8 +105,13 @@ def render_movement(row: dict, notes: bool = True) -> None:
     """
     extras = [(k, v) for k, v in row.items() if k not in _KNOWN and str(v).strip()]
     if extras:
+        from utils import user_store
+
         ecols = st.columns(len(extras))
         for col, (key, value) in zip(ecols, extras):
+            if "logged" in str(key).lower() and "at" not in str(key).lower():
+                # The sheet keeps the email; the screen shows the person.
+                value = user_store.name_of(value)
             col.markdown("**%s:** %s" % (key, literal(value)))
 
     if notes:

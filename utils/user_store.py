@@ -203,3 +203,20 @@ def set_pinned_project(email: str, project: str) -> str:
         return _on_users_ws(_do) or ""
     except Exception as exc:
         return "Could not save the pin: %s" % exc
+
+
+def name_of(value: str) -> str:
+    """The person behind a logged-by cell, for DISPLAY only.
+
+    The sheet keeps the email — the durable, unambiguous identity — and the
+    screen shows the Users tab's Name for it (Hamid, 24 Aug: "use the name
+    associated to the email, no need to change the data"). Anything that is
+    not a known email passes through untouched, so hand-typed names and
+    legacy values keep reading as written.
+    """
+    raw = str(value or "").strip()
+    low = raw.lower()
+    if "@" not in low:
+        return raw
+    entry = fetch_allowed_users().get(low)
+    return (entry.get("name") or raw) if entry else raw
