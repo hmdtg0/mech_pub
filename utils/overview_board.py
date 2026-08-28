@@ -24,7 +24,9 @@ never read green and say "overdue".
 Courier facts stay a lead, not a join: matched to a leg by date AND route,
 and two candidates on one day print nothing and say how many were found. One
 box carries several parts, and the wrong tracking number is worse than none
-(`shipments_store.same_day` has the long version).
+(`shipments_store.same_day` has the long version). Since 28 Aug the matched
+courier has no column — its name shows AS the Status text of a healthy
+moving row (`status_label`).
 """
 from __future__ import annotations
 
@@ -74,9 +76,25 @@ LEGEND = (
     "neither tracking nor ETA, or a sender's count went negative."
 )
 
-COLUMNS = ["Project", "M-Code", "Part", "Version", "Owner", "Qty", "Received",
-           "On hand", "From", "From location", "Recipient", "Date", "Courier",
-           "Tracking", "ETA / arrived", "Status", "Logged by", "Attention"]
+# Trimmed 28 Aug (Hamid): Owner and From location dropped; Courier and
+# Tracking folded into the Status cell (`status_label`). The keys STAY on
+# every row so the search box still matches an owner, a location, a courier
+# or a tracking number — they just have no column of their own.
+COLUMNS = ["Project", "M-Code", "Part", "Version", "Qty", "Qty received",
+           "On hand", "From", "Recipient", "Date", "ETA / arrived", "Status",
+           "Logged by", "Attention"]
+
+
+def status_label(row) -> str:
+    """The Status CELL's text. A courier's name IS the in-transit status
+    (Hamid, 28 Aug): a healthy moving row reads "DHL" — who carries it —
+    instead of the words, now that Courier/Tracking have no columns.
+    Warnings keep their words so a red row still says what is wrong, and
+    colour always comes from the REAL Status, never from this text."""
+    courier = str(row.get("Courier", "") or "").strip()
+    if row.get("Status", "") in (IN_TRANSIT, SHIPPED) and courier:
+        return courier
+    return row.get("Status", "")
 
 # Within a part: its orders, then what moved, then what stayed behind.
 _KIND = {"order": 0, "none": 0, "leg": 1, "rest": 2}
@@ -204,7 +222,7 @@ def _held(part_id: str, project: str, holder: str = ""):
 
 def _blank(project, mcode, part, version, owner, kind):
     return {"Project": project, "M-Code": mcode or "—", "Part": part or "—",
-            "Version": version, "Owner": owner, "Qty": "", "Received": "",
+            "Version": version, "Owner": owner, "Qty": "", "Qty received": "",
             "On hand": "", "From": "—", "From location": "", "Recipient": "—",
             "Date": "", "Courier": "", "Tracking": "", "ETA / arrived": "",
             "Status": "", "Logged by": "", "Attention": "", "_kind": kind}
@@ -283,7 +301,7 @@ def rows(orders: Optional[List[dict]] = None, legs: Optional[List[dict]] = None,
                      ident.get("owner", ""), "order")
         row.update({
             "Qty": qty_cell(order.get("qty_ordered", "")),
-            "Received": qty_cell(order.get("qty_received", "")),
+            "Qty received": qty_cell(order.get("qty_received", "")),
             "On hand": on_hand(project, code),
             "From": order.get("ordered_by", "") or "—",
             "From location": holders_store.location_of(order.get("ordered_by", "")),

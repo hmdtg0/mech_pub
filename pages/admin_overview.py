@@ -88,6 +88,8 @@ for r in rows:
     rec["M-Code"] = ui.part_url(r["Project"], r["M-Code"])
     # The sheet keeps the email; the screen shows the person.
     rec["Logged by"] = user_store.name_of(r.get("Logged by", ""))
+    # A courier's name here MEANS in transit; colour stays on the real status.
+    rec["Status"] = overview_board.status_label(r)
     _records.append(rec)
 _df = pd.DataFrame(_records)[overview_board.COLUMNS]
 _bg = [overview_board.COLOURS.get(r["Status"], "") for r in rows]
@@ -123,11 +125,13 @@ st.caption(overview_board.LEGEND)
 st.caption(
     "One row per **order thread**, so a part with seven orders has seven "
     "rows; movements and what stayed behind follow its orders. **Date** is "
-    "when an order was raised, or when a consignment left. Courier, tracking "
-    "and ETA come from the central **Shipments** tab, matched to a movement "
-    "by date and route — where two records fit the same day the cells stay "
-    "empty and Attention says so. **On hand** and what a sender still holds "
-    "are read from the **Stock** count, which a Shipping row has already "
-    "reduced. An open order whose ETA has passed says so in Attention "
-    "without turning the row red — most open threads carry one."
+    "when an order was raised, or when a consignment left. A courier's name "
+    "in **Status** means that consignment is in transit with them — matched "
+    "from the central **Shipments** tab by date and route; where two records "
+    "fit the same day the row keeps the word and Attention says so. Tracking "
+    "numbers live on **Shipments**, and the search box here still finds a "
+    "courier, tracking number, owner or location. **On hand** and what a "
+    "sender still holds are read from the **Stock** count, which a Shipping "
+    "row has already reduced. An open order whose ETA has passed says so in "
+    "Attention without turning the row red — most open threads carry one."
 )
