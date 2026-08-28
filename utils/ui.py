@@ -194,3 +194,58 @@ def require_single_project(purpose: str = "This page"):
 
     _ask()
     st.stop()
+
+
+def part_link(project: str, code: str) -> str:
+    """The one way a table cell jumps to a part: a same-tab anchor to Part
+    Detail, carried by address (?project=&part=, consumed there and cleared).
+    Every page uses THIS so the behaviour cannot fork per table."""
+    from html import escape
+    from urllib.parse import quote
+
+    code = str(code or "").strip()
+    if not code or code == "\u2014":
+        return escape(code)
+    return ('<a href="tracker_part_detail?project=%s&part=%s" '
+            'title="Open %s on Part Detail">%s</a>'
+            % (quote(str(project or "")), quote(code), escape(code),
+               escape(code)))
+
+
+def linked_table(headers, rows, backgrounds=None, index: bool = False) -> None:
+    """A colour-codable table whose cells may be real hyperlinks.
+
+    st.html, not st.markdown or st.dataframe: the markdown renderer rewrites
+    every anchor to target="_blank", and the dataframe cannot render an
+    anchor at all. Cells arrive as READY HTML (escape plain text with
+    ui.esc(); build links with ui.part_link()). Full height always — tables
+    never scroll inside themselves, the page scrolls (house rule, 18 Aug).
+    """
+    import streamlit as st
+
+    if index:
+        headers = ["#"] + list(headers)
+        rows = [[str(i)] + list(r) for i, r in enumerate(rows, start=1)]
+    body = []
+    for i, cells in enumerate(rows):
+        bg = backgrounds[i] if backgrounds else ""
+        body.append('<tr%s>%s</tr>'
+                    % (' style="background:%s"' % bg if bg else "",
+                       "".join("<td>%s</td>" % c for c in cells)))
+    st.html(
+        '<table class="mech-table" style="width:100%%;'
+        'border-collapse:collapse;font-size:13px">'
+        '<thead><tr style="background:#fafafa">%s</tr></thead>'
+        '<tbody>%s</tbody></table>'
+        '<style>.mech-table td, .mech-table th '
+        '{padding:5px 10px; border-bottom:1px solid #e6e6e6; text-align:left;}'
+        ' .mech-table th {font-weight:600; color:#555; '
+        'border-bottom:1px solid #d5d5d5;} '
+        '.mech-table a {color:#1a73e8; text-decoration:underline;}</style>'
+        % ("".join("<th>%s</th>" % h for h in headers), "".join(body)))
+
+
+def esc(text) -> str:
+    """Plain text, made safe for a linked_table cell."""
+    from html import escape
+    return escape(str(text if text is not None else ""))

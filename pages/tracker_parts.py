@@ -371,25 +371,23 @@ with tab_ontrack:
     _section(on_track, "ontrack", "No parts in this group.")
 
 with tab_table:
-    table_df = pd.DataFrame([{
-        # Token + name: a dataframe cell renders text verbatim, no markup.
-        "Project": project_colors.tag(p["project"]),
-        "M-Code": p["mcode"], "Part": p["part_name"], "Category": p["category"],
-        "Version": p["version"], "Latest status": p["status"],
-        "Ordered": p["ordered"], "Received": p["received"], "On hand": p["on_hand"],
-        "ETA": p["eta"], "Location": p["location"], "Holder": p["holder"],
-        "Attention": " · ".join(p["flags"]), "Notes": p["notes"],
-    } for p in view])
-
-    # Same colour convention as the Stock page: green = fine, red = needs work.
-    def highlight_attention(row):
-        if str(row.get("Attention", "")).strip():
-            return ["background-color: #f8d7da"] * len(row)
-        return ["background-color: #d4edda"] * len(row)
-
-    if not table_df.empty:
-        st.dataframe(table_df.style.apply(highlight_attention, axis=1),
-                     height=table_height(len(table_df)), hide_index=True)
+    # The shared linked_table: M-Code jumps to Part Detail in this tab, rows
+    # keep the page's red/green attention colours.
+    _heads = ["Project", "M-Code", "Part", "Category", "Version",
+              "Latest status", "Ordered", "Received", "On hand", "ETA",
+              "Location", "Holder", "Attention", "Notes"]
+    if view:
+        from utils.ui import esc, linked_table, part_link
+        _cells = [[
+            esc(project_colors.tag(p["project"])),
+            part_link(p["project"], p["mcode"]),
+            esc(p["part_name"]), esc(p["category"]), esc(p["version"]),
+            esc(p["status"]), esc(p["ordered"]), esc(p["received"]),
+            esc(p["on_hand"]), esc(p["eta"]), esc(p["location"]),
+            esc(p["holder"]), esc(" · ".join(p["flags"])), esc(p["notes"]),
+        ] for p in view]
+        _bg = ["#f8d7da" if p["flags"] else "#d4edda" for p in view]
+        linked_table(_heads, _cells, _bg)
     else:
         st.info("No parts match the current filters.")
 

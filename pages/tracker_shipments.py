@@ -96,26 +96,25 @@ tab_moves, tab_courier, tab_gaps = st.tabs([
 
 with tab_moves:
     if view:
-        rows = []
+        from utils.ui import esc, linked_table, part_link
+        _heads = ["Date", "Project", "Event", "Part", "Description", "Qty",
+                  "From", "To", "Tracking (same day)", "Notes"]
+        _cells = []
         for r in sorted(view, key=lambda r: shipments_store.calendar_day(
                 r.get("date", "")) or (0, 0), reverse=True):
             leads = shipments_store.same_day(r.get("date", ""))
-            rows.append({
-                "Date": r.get("date", ""),
-                "Project": r.get("project", ""),
-                "Event": r.get("event", ""),
-                "Part": r.get("part_id", "") or "—",
-                "Description": r.get("description", ""),
-                "Qty": r.get("qty", ""),
-                "From": r.get("from", ""),
-                "To": r.get("to", ""),
-                "Tracking (same day)": "; ".join(
-                    c.get("tracking", "") for c in leads if c.get("tracking")) or "—",
-                "Notes": r.get("notes", ""),
-            })
-        st.dataframe(pd.DataFrame(rows), hide_index=True,
-                     height=ui.table_height(len(rows)),
-                     use_container_width=True)
+            _cells.append([
+                esc(r.get("date", "")), esc(r.get("project", "")),
+                esc(r.get("event", "")),
+                part_link(r.get("project", ""), r.get("part_id", ""))
+                or "—",
+                esc(r.get("description", "")), esc(r.get("qty", "")),
+                esc(r.get("from", "")), esc(r.get("to", "")),
+                esc("; ".join(c.get("tracking", "") for c in leads
+                              if c.get("tracking")) or "—"),
+                esc(r.get("notes", "")),
+            ])
+        linked_table(_heads, _cells)
         st.caption("“Tracking (same day)” is a courier record posted on the "
                    "same date — a lead to confirm, not a stated fact. A dash "
                    "in Part means the row records a batch rather than one "

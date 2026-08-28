@@ -78,20 +78,16 @@ st.markdown("**Projects** — " + " ".join(
     for name in sorted({r["Project"] for r in rows})), unsafe_allow_html=True)
 
 
-def _paint(row):
-    return ["background-color: %s"
-            % overview_board.COLOURS.get(row["Status"], "")] * len(row)
-
-
-table = pd.DataFrame(rows)[overview_board.COLUMNS]
-# Qty and Received hold numbers on counted rows and the sheet's own words
-# ("batch", "set") on migrated movements. Arrow cannot serialise the mixture,
-# so these are made text here rather than letting Streamlit guess at them.
-for column in ("Qty", "Received", "On hand"):
-    table[column] = table[column].map(lambda v: "" if v == "" else str(v))
-
-st.dataframe(table.style.apply(_paint, axis=1), hide_index=True,
-             height=ui.table_height(len(rows)), use_container_width=True)
+# The shared linked_table: every M-Code is a same-tab jump to Part Detail,
+# rows painted from the one palette. (The old st.dataframe could not carry
+# an anchor at all.)
+_cells, _bg = [], []
+for r in rows:
+    _cells.append([ui.part_link(r["Project"], r["M-Code"])
+                   if col == "M-Code" else ui.esc(r.get(col, ""))
+                   for col in overview_board.COLUMNS])
+    _bg.append(overview_board.COLOURS.get(r["Status"], ""))
+ui.linked_table(overview_board.COLUMNS, _cells, _bg)
 
 st.caption(overview_board.LEGEND)
 st.caption(

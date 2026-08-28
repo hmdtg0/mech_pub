@@ -488,15 +488,8 @@ with tab_cards:
 
 with tab_table:
     # One row per order, both record systems, same filters as the cards.
-    # A hand-built HTML table rather than st.dataframe: the M-Code cell is a
-    # real single-click hyperlink to Part Detail (1.38's LinkColumn renders
-    # relative links as raw text), and row colours come from the same
-    # Overview palette constants. Part Detail consumes ?project=&part= and
-    # clears them — a link opens a new tab, and a fresh tab shares no
-    # session state.
-    from html import escape
-    from urllib.parse import quote
-
+    # Rendered by the shared ui.linked_table so the M-Code jump and the house
+    # rules (full height, no inner scroll, same-tab anchors) hold everywhere.
     _paint_by = {
         "new": overview_board.COLOURS[overview_board.ORDERED],
         "processing": overview_board.COLOURS[overview_board.ORDERED],
@@ -505,59 +498,30 @@ with tab_table:
         "delivered": overview_board.COLOURS[overview_board.DELIVERED],
         "cancelled": overview_board.COLOURS[overview_board.CANCELLED],
     }
-    _heads = ["#", "Project", "M-Code", "Part", "Version", "Order ID", "Date",
+    _heads = ["Project", "M-Code", "Part", "Version", "Order ID", "Date",
               "Ordered", "Received", "Status", "Priority", "Raised by",
               "Recipient"]
-    _body = []
-    for i, e in enumerate(view, start=1):
+    _cells, _bg = [], []
+    for e in view:
         o, t = e.get("order") or {}, e.get("thread") or {}
-        _code = e["code"]
-        if _code:
-            # Same tab, like the cards' button: the address carries the
-            # part, so a full page load lands right (Hamid, 24 Aug).
-            _cell = ('<a href="tracker_part_detail?project=%s&part=%s" '
-                     'title="Open %s on Part Detail">%s</a>'
-                     % (quote(e["project"]), quote(_code), escape(_code),
-                        escape(_code)))
-        else:
-            _cell = ""
-        _vals = [
-            str(i), escape(e["project"]), _cell,
-            escape(o.get("PartName", "") or t.get("part_name", "")),
-            escape(o.get("Version", "") or t.get("version", "")),
-            escape((o.get("OrderID", "") if o else "")
+        _cells.append([
+            ui.esc(e["project"]),
+            ui.part_link(e["project"], e["code"]),
+            ui.esc(o.get("PartName", "") or t.get("part_name", "")),
+            ui.esc(o.get("Version", "") or t.get("version", "")),
+            ui.esc((o.get("OrderID", "") if o else "")
                    or str(t.get("order_id", ""))),
-            escape(e["when"] or t.get("date", "")),
-            escape(str(t.get("qty_ordered", "") if t
+            ui.esc(e["when"] or t.get("date", "")),
+            ui.esc(str(t.get("qty_ordered", "") if t
                        else o.get("Quantity", ""))),
-            escape(str(t.get("qty_received", "")) if t else ""),
-            escape(e["status"]),
-            escape(e["priority"] if e["kind"] == "app" else ""),
-            escape(e["who"]),
-            escape((o.get("Recipient", "") if o else t.get("recipient", ""))),
-        ]
-        _body.append('<tr style="background:%s">%s</tr>'
-                     % (_paint_by.get(e["status"], "#ffffff"),
-                        "".join("<td>%s</td>" % v for v in _vals)))
-    # House rule (18 Aug): tables never clip or scroll inside themselves —
-    # the page scrolls. Styled to read like the Overview page's table, the
-    # reference UI: light header band, thin row rules, the status palette on
-    # whole rows.
-    # st.html, not st.markdown: the markdown renderer rewrites EVERY anchor
-    # to target="_blank", and Hamid wants the link to behave like the cards'
-    # button — same tab (24 Aug). st.html leaves the anchors alone.
-    st.html(
-        '<table class="ao-table" style="width:100%%;border-collapse:collapse;'
-        'font-size:13px">'
-        '<thead><tr style="background:#fafafa">%s</tr></thead>'
-        '<tbody>%s</tbody></table>'
-        '<style>.ao-table td, .ao-table th '
-        '{padding:5px 10px; border-bottom:1px solid #e6e6e6; '
-        'text-align:left;} .ao-table th '
-        '{font-weight:600; color:#555; border-bottom:1px solid #d5d5d5;} '
-        '.ao-table a {color:#1a73e8; text-decoration:underline;}'
-        '</style>'
-        % ("".join("<th>%s</th>" % h for h in _heads), "".join(_body)))
+            ui.esc(str(t.get("qty_received", "")) if t else ""),
+            ui.esc(e["status"]),
+            ui.esc(e["priority"] if e["kind"] == "app" else ""),
+            ui.esc(e["who"]),
+            ui.esc((o.get("Recipient", "") if o else t.get("recipient", ""))),
+        ])
+        _bg.append(_paint_by.get(e["status"], "#ffffff"))
+    ui.linked_table(_heads, _cells, _bg, index=True)
 
     st.caption(overview_board.LEGEND)
     st.caption(

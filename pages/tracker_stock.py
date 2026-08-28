@@ -133,18 +133,18 @@ t1, t2, t3, t4 = st.tabs([
 
 with t1:
     if shown:
-        df = pd.DataFrame([{
-            "Part ID": r.get("part_id", "") or "—",
-            "Description": r.get("description", ""),
-            "Type": r.get("type", ""),
-            "Holder": r.get("holder", ""),
-            "Where": holders_store.location_of(r.get("holder", "")) or "—",
-            "Qty on hand": to_int(r.get("qty", "")),
-            "Last counted": r.get("last_counted", ""),
-            "Notes": r.get("notes", ""),
-        } for r in shown])
-        st.dataframe(df, use_container_width=True, hide_index=True,
-                     height=table_height(len(df)))
+        from utils.ui import esc, linked_table, part_link
+        _heads = ["Part ID", "Description", "Type", "Holder", "Where",
+                  "Qty on hand", "Last counted", "Notes"]
+        linked_table(_heads, [[
+            part_link(r.get("project", "") or active_name,
+                      r.get("part_id", "")) or "—",
+            esc(r.get("description", "")), esc(r.get("type", "")),
+            esc(r.get("holder", "")),
+            esc(holders_store.location_of(r.get("holder", "")) or "—"),
+            esc(to_int(r.get("qty", ""))), esc(r.get("last_counted", "")),
+            esc(r.get("notes", "")),
+        ] for r in shown])
         st.caption("A dash in Part ID means the row states a holder's total "
                    "without saying which parts make it up.")
     else:
@@ -182,17 +182,15 @@ with t2:
 
 with t3:
     if shown_history:
-        df = pd.DataFrame([{
-            "Date": h.get("last_counted", ""),
-            "Part ID": h.get("part_id", ""),
-            "Description": h.get("description", ""),
-            "Qty": to_int(h.get("qty", "")),
-            "From": h.get("holder", ""),
-            "To": h.get("sent_to", ""),
-            "Notes": h.get("notes", ""),
-        } for h in shown_history])
-        st.dataframe(df, use_container_width=True, hide_index=True,
-                     height=table_height(len(df)))
+        from utils.ui import esc, linked_table, part_link
+        linked_table(
+            ["Date", "Part ID", "Description", "Qty", "From", "To", "Notes"],
+            [[esc(h.get("last_counted", "")),
+              part_link(h.get("project", "") or active_name,
+                        h.get("part_id", "")),
+              esc(h.get("description", "")), esc(to_int(h.get("qty", ""))),
+              esc(h.get("holder", "")), esc(h.get("sent_to", "")),
+              esc(h.get("notes", ""))] for h in shown_history])
         st.caption("“(external)” means the goods arrived from a supplier "
                    "rather than moving between two holders.")
     else:
