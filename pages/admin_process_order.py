@@ -7,43 +7,27 @@ line (the reference record's second line of the pair); anything else worth
 recording goes in through "Add history entry". Overview, Parts, Movements
 and the rest read that history, so this page is where their data comes from.
 """
-import pandas as pd
 import streamlit as st
 
 from datetime import datetime
 from utils.auth import require_role
 from utils.google_client import get_gspread_client
 from utils.orders_store import fetch_all_orders, update_order
-from utils import (holders_store, parts_tracker, project_colors,
-                   project_registry, record_builder, stock_store,
-                   tracker_orders, tracker_writer, ui)
-from utils.tracker_parse import event_of, holder_of, place_of, to_int
+from utils import (history_entry, parts_tracker, project_colors,
+                   project_registry, tracker_orders, ui)
+from utils.tracker_parse import holder_of
 from utils.drive_handler import download_file_bytes, download_to_local
 from utils.message_store import fetch_messages_for_order, send_message
-import config
-from config import ORDER_STATUSES, STATUS_COLORS, IS_LOCAL, CNY_TO_GBP
+from config import ORDER_STATUSES, STATUS_COLORS, IS_LOCAL
 
 
 user = require_role("admin", "engineer", "logistics")
 
 st.title("🔧 Process Order")
 
-
-def flash(kind: str, text: str) -> None:
-    """Say something that has to survive `st.rerun()`.
-
-    `st.toast` does not (verified in Streamlit 1.38): the rerun tears the
-    page down before it is painted, so every action that saved and reran was
-    silently confirming nothing. Stashing the message and rendering it on the
-    next run is what actually reaches the user.
-    """
-    st.session_state["proc_flash"] = (kind, text)
-
-
-_flash = st.session_state.pop("proc_flash", None)
-if _flash:
-    {"success": st.success, "warning": st.warning,
-     "error": st.error}.get(_flash[0], st.info)(_flash[1])
+# The entry forms and their flash live in utils/history_entry since 28 Aug
+# ("I want to unify them") — the page keeps only the worklist, the order
+# header and the messages.
 
 orders = fetch_all_orders()
 if not orders:
@@ -55,10 +39,6 @@ if not orders:
 orders = ui.in_scope(orders)
 _multi_project = len({(o.get("Project") or "").strip() for o in orders
                       if (o.get("Project") or "").strip()}) > 1
-
-def _rank(s: str) -> int:
-    return ORDER_STATUSES.index(s) if s in ORDER_STATUSES else 0
-
 
 def _parse_eta(text):
     """A sheet ETA as a date, if one of its known spellings fits."""
@@ -316,30 +296,9 @@ if status != stored_status:
                 st.rerun()
 
 # --- The part's ledger first: what you are updating against ---
-if record_id and mcode:
-    _hist = parts_tracker.fetch_all_parts(record_id).get(mcode, {}).get(
-        "history", [])
-    st.subheader("📜 %s history (%d)" % (mcode, len(_hist)))
-    if _hist:
-        st.dataframe(pd.DataFrame([{
-            "Date": r.get("date", ""),
-            "Event": r.get("event", "") or r.get("type", ""),
-            "Order / Sample ID": r.get("order_id", ""),
-            "Build": r.get("build", ""),
-            "Qty ordered": r.get("qty_ordered", ""),
-            "Qty received": r.get("qty_received", ""),
-            "Qty moved": r.get("qty_moved", ""),
-            "From": place_of(r),
-            "To": holder_of(r),
-            "ETA": r.get("eta", ""),
-            "QC": r.get("status", ""),
-            "Courier / Tracking": r.get("courier", ""),
-            "Notes": r.get("notes", ""),
-        } for r in _hist]), hide_index=True, use_container_width=True,
-            height=ui.table_height(len(_hist)))
-    else:
-        st.caption("No history rows on this part's tab yet — the entries "
-                   "you add below become its first.")
+# One shape with Part Detail since 28 Aug (Hamid: "I want to unify them") —
+# both pages draw utils/history_entry's table and entry point.
+history_entry.history_table(mcode, record_id)
 
 st.markdown("---")
 
@@ -413,282 +372,13 @@ if drive_link:
 st.markdown("---")
 
 # --- Add history entry: the ONE entry point (Hamid, 28 Aug) -----------------
-# "the goal is to have one entry point called 'Add history entry'". The
-# picker decides which fields show; each branch is the exact form that used
-# to stand on its own — same keys, same writes, same wiring. The old
-# stock-movement form went first as redundant (a History entry with a
-# moves-stock event and a quantity reaches the movement log and the count
-# through the same writer); Order info followed ("I dont see any use for
-# order info for now") — its five fields stay fully editable on the All
-# Orders order cards, which carry the identical form.
-st.subheader("📜 Add history entry")
-
-_entry_kind = st.radio(
-    "What are you recording?",
-    ["📜 History entry", "💰 Costs"],
-    horizontal=True, key="proc_entry_kind", label_visibility="collapsed")
-
-if _entry_kind.endswith("History entry"):
-    st.caption("Appends one line to **%s**'s history in the project record — "
-               "the same ledger the board, Parts, Part Detail and Movements "
-               "read. A **Receipt** is the full receive: it writes the "
-               "paired receive line, counts the stock, and marks the order "
-               "DELIVERED — quantity and vendor default from the order when "
-               "left blank." % (mcode or "the part"))
-    # The whole vocabulary, straight from the event table — not a second list
-    # typed out here. The old hardcoded pair got out of step with it: `Scrap`
-    # was offered but treated as informational, so a scrapped batch never left
-    # the count, and `Receipt` and `Delivery` could not be entered at all
-    # (19 Aug).
-    HISTORY_EVENTS = list(config.EVENT_CHOICES)
-
-    if not record_id or not mcode:
-        st.info("Needs a registered project record and a Part ID on the order.")
-    else:
-        with st.form("history_form_%s" % order_id):
-            h1, h2, h3 = st.columns(3)
-            with h1:
-                h_event = st.selectbox("Event", HISTORY_EVENTS)
-                h_date = st.date_input("Date", value=datetime.now().date())
-                h_eta = st.date_input("New ETA (optional)", value=None,
-                                      help="Lands in the row's ETA column — "
-                                           "the order's shown ETA follows the "
-                                           "latest history row that carries "
-                                           "one.")
-            with h2:
-                # Directory pickers with a type-a-name escape (Hamid, 28 Aug
-                # interview). A TYPED name is registered in the Holders
-                # directory BEFORE the entry is written — From as a "source"
-                # (a vendor; never counted negative), To as a "person".
-                _holders = holders_store.names()
-                h_from_pick = st.selectbox(
-                    "From", [""] + _holders,
-                    format_func=lambda h: h or "—")
-                h_from_typed = st.text_input(
-                    "…or type a vendor / outside source",
-                    help="A new name is saved to the Holders directory as a "
-                         "'source' before the entry is recorded.")
-                h_to_pick = st.selectbox(
-                    "To", [""] + _holders,
-                    format_func=lambda h: h or "—")
-                h_to_typed = st.text_input(
-                    "…or type a new name",
-                    help="A new name is saved to the Holders directory as a "
-                         "'person' before the entry is recorded.")
-                h_courier = st.text_input("Courier / Tracking", value="")
-            with h3:
-                h_qty_ordered = st.text_input("Qty ordered", value="")
-                h_qty_moved = st.text_input("Qty moved", value="")
-                h_qty_received = st.text_input("Qty received", value="")
-            h4, h5, h6 = st.columns(3)
-            with h4:
-                h_qc = st.text_input("QC Pass?",
-                                     placeholder="e.g. Pass / FAILED QC")
-            with h5:
-                h_build = st.text_input("Build", value="")
-            with h6:
-                h_lead = st.text_input("Lead time (days)", value="")
-            h_notes = st.text_input("Notes")
-            h_selected = st.checkbox("Selected for MP?", value=False)
-            add_entry = st.form_submit_button("➕ Append to part history",
-                                              type="primary")
-        if add_entry:
-            h_from = (h_from_typed.strip() or h_from_pick).strip()
-            h_to = (h_to_typed.strip() or h_to_pick).strip()
-            # Only a STOCK-MOVING entry has to name somebody — a Cancelled,
-            # QC, Update or Hold line legitimately names nobody (28 Aug;
-            # the old blanket guard would have blocked every cancellation).
-            if config.moves_stock(h_event) and not h_to and not h_from:
-                st.error("From or To is needed — a stock-moving entry that "
-                         "names nobody records nothing.")
-                st.stop()
-            # A typed name reaches the directory FIRST (Hamid: "make sure
-            # the vendor will be recorded ... before user submits it") — if
-            # that write fails, no entry is recorded at all.
-            _reg = ""
-            if h_from and not holders_store.is_known(h_from):
-                _reg = holders_store.register(
-                    h_from, kind="source", notes="added from Process Order")
-            if not _reg and h_to and not holders_store.is_known(h_to):
-                _reg = holders_store.register(
-                    h_to, kind="person", notes="added from Process Order")
-            if _reg:
-                st.error("Not recorded — the new name could not be saved to "
-                         "the Holders directory first: %s" % _reg)
-                st.stop()
-            now = datetime.now()
-            if h_event == "Receipt":
-                # A Receipt IS the full receive (Hamid, 28 Aug: "add recievd
-                # goods to entry items no need for extra tab"): the paired
-                # receive line, the movement log + count, Status=delivered
-                # and the tracking sync — the old Receive-goods form's exact
-                # writes, its prefills now submit-time defaults from the
-                # order (quantity; the vendor as From).
-                if not h_to:
-                    st.error("Received by is needed — pick who holds the "
-                             "parts now in **To**.")
-                    st.stop()
-                _qty_rec = to_int(h_qty_received)
-                if not _qty_rec:
-                    try:
-                        _qty_rec = int(float(order.get("Quantity", 1) or 1))
-                    except (TypeError, ValueError):
-                        _qty_rec = 1
-                _recv_from = h_from or str(order.get("Vendor", "")).strip()
-                _note = (h_notes.strip()
-                         or "received %s" % h_date.strftime("%d %b %Y"))
-                ok, message = tracker_writer.write_receipt(
-                    mcode, order_id=order_id,
-                    qty_ordered=str(order.get("Quantity", "")),
-                    qty_received=str(_qty_rec),
-                    received_from=_recv_from,
-                    holder=h_to,
-                    courier=h_courier.strip(),
-                    date=h_date.strftime("%d %b %Y"),
-                    version=order.get("Version", ""),
-                    eta=order.get("ETA", ""),
-                    note=_note,
-                    logged_by=user.get("email", "") or user.get("name", ""),
-                    logged_at=now.strftime("%d %b %Y %H:%M"),
-                    sheet_id=record_id)
-                if ok:
-                    # Goods arriving ARE stock arriving — one call writes the
-                    # merged movement log and the count.
-                    stock_note = ""
-                    if _qty_rec > 0:
-                        res = stock_store.record_movement(
-                            mcode, project_name, _qty_rec,
-                            h_to, _recv_from, event="Receipt",
-                            description=order.get("PartName", ""),
-                            part_type=order.get("Process", ""),
-                            notes=_note, courier=h_courier.strip(),
-                            build=order.get("Version", ""),
-                            date=h_date.strftime("%d %b %Y"),
-                            logged_by=user.get("email", "")
-                            or user.get("name", ""))
-                        stock_note = ("" if res.get("ok") else
-                                      " The stock count was NOT updated: %s"
-                                      % res.get("problem", "unknown error"))
-                    if client:
-                        updates = {"Status": "delivered"}
-                        if h_courier.strip():
-                            updates["TrackingNum"] = h_courier.strip()
-                        update_order(client, order_id, updates)
-                    parts_tracker.refresh(record_id)
-                    # The Overview is derived — recompute it so the receipt
-                    # shows everywhere immediately, not only on the part tab.
-                    ov = record_builder.write_overview(
-                        project_name,
-                        user.get("email", "") or user.get("name", ""),
-                        sheet_id=record_id, replace=True)
-                    if ov.get("problem"):
-                        st.warning("Overview not refreshed: %s"
-                                   % ov["problem"])
-                    flash("warning" if stock_note else "success",
-                          message + stock_note)
-                    st.rerun()
-                else:
-                    st.error(message)
-                st.stop()
-            else:   # every other event: the generic ledger append
-                ok, message = tracker_writer.append_history(mcode, {
-                    "event": h_event,
-                    "date": h_date.strftime("%d %b %Y"),
-                    "order_id": order_id,
-                    "version": order.get("Version", ""),
-                    "build": h_build.strip(),
-                    "qty_ordered": h_qty_ordered.strip(),
-                    "qty_moved": h_qty_moved.strip(),
-                    "qty_received": h_qty_received.strip(),
-                    "place": h_from.strip(),
-                    "holder": h_to.strip(),
-                    "eta": h_eta.strftime("%d %b %Y") if h_eta else "",
-                    "lead_time": h_lead.strip(),
-                    "status": h_qc.strip(),
-                    "courier": h_courier.strip(),
-                    "selected": "TRUE" if h_selected else "FALSE",
-                    "logged_by": user.get("email", "") or user.get("name", ""),
-                    "logged_at": now.strftime("%d %b %Y %H:%M"),
-                    "notes": h_notes.strip(),
-                    # The pilot ledger kept the kind of row in `Type`.
-                    "type": h_event,
-                }, sheet_id=record_id)
-                # Goods on the move go through stock_store.record_movement —
-                # the ONE writer for the merged movement log and the count —
-                # so a moves-stock event with a quantity reaches both, which
-                # is why the old separate movement form was redundant and was
-                # removed (28 Aug). Before 19 Aug this branch called a writer
-                # aimed at a tab that no longer existed and ignored the
-                # result, so a Shipping entered here landed on the part tab
-                # and nowhere else.
-                stock_note = ""
-                h_qty = to_int(h_qty_moved.strip() or h_qty_received.strip())
-                if ok and config.moves_stock(h_event) and h_qty > 0:
-                    res = stock_store.record_movement(
-                        mcode, project_name, h_qty,
-                        h_to.strip(), h_from.strip(), event=h_event,
-                        description=order.get("PartName", ""),
-                        part_type=order.get("Process", ""),
-                        notes=h_notes.strip(), courier=h_courier.strip(),
-                        build=h_build.strip(),
-                        date=h_date.strftime("%d %b %Y"),
-                        logged_by=user.get("email", "") or user.get("name", ""))
-                    stock_note = (" · logged and counted" if res.get("ok") else
-                                  " — but the movement log and count were NOT "
-                                  "updated: %s"
-                                  % res.get("problem", "unknown error"))
-                elif ok and config.moves_stock(h_event):
-                    stock_note = (" · no quantity given, so nothing was "
-                                  "counted — fill in Qty moved to have it "
-                                  "reach the count")
-                if ok:
-                    parts_tracker.refresh(record_id)
-                    ov = record_builder.write_overview(
-                        project_name,
-                        user.get("email", "") or user.get("name", ""),
-                        sheet_id=record_id, replace=True)
-                    if ov.get("problem"):
-                        st.warning("Overview not refreshed: %s" % ov["problem"])
-                    (st.warning if "NOT" in stock_note else st.success)(
-                        message + stock_note)
-                else:
-                    st.error(message)
-
-else:   # 💰 Costs
-    def _to_float(v):
-        try:
-            return float(str(v).strip()) if str(v).strip() else 0.0
-        except (ValueError, TypeError):
-            return 0.0
-
-    current_parts = _to_float(order.get("PartsCostCNY", ""))
-    current_ship = _to_float(order.get("ShippingCostCNY", ""))
-
-    with st.form("cost_form"):
-        cc1, cc2 = st.columns(2)
-        with cc1:
-            parts_cost = st.number_input("Parts (CNY)", min_value=0.0, value=current_parts, step=1.0, format="%.2f")
-        with cc2:
-            ship_cost = st.number_input("Shipping (CNY)", min_value=0.0, value=current_ship, step=1.0, format="%.2f")
-
-        total_cny = parts_cost + ship_cost
-        total_gbp = total_cny * CNY_TO_GBP
-
-        st.markdown(f"**Total: ¥{total_cny:,.2f} CNY ≈ £{total_gbp:,.2f} GBP**  *(rate: 1 CNY = {CNY_TO_GBP} GBP)*")
-
-        if st.form_submit_button("Save Costs", type="primary"):
-            if client:
-                cost_updates = {}
-                if parts_cost != current_parts:
-                    cost_updates["PartsCostCNY"] = str(parts_cost)
-                if ship_cost != current_ship:
-                    cost_updates["ShippingCostCNY"] = str(ship_cost)
-                if cost_updates:
-                    update_order(client, order_id, cost_updates)
-                    flash("success", "Costs saved.")
-                    st.rerun()
-                else:
-                    st.info("No changes.")
+# "the goal is to have one entry point called 'Add history entry'". Since
+# 28 Aug the WHOLE section lives in utils/history_entry.py, shared verbatim
+# with Part Detail (Hamid: "I want to unify them ... this will be our one
+# and only entry point to update the orderes") — this door passes the
+# opened order, so Receipt and Costs land on it.
+history_entry.render_entry(user, mcode, record_id, project_name,
+                           order=order, key_ns=str(order_id))
 
 st.markdown("---")
 
