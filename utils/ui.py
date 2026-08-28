@@ -227,21 +227,53 @@ def linked_table(headers, rows, backgrounds=None, index: bool = False,
     ui.esc(); build links with ui.part_link()). Full height always — tables
     never scroll inside themselves, the page scrolls (house rule, 18 Aug).
 
-    `key` turns on a 🪟 Columns picker (the dataframe toolbar's eye,
-    rebuilt for this table): per-column checkboxes in a popover, remembered
-    in the session under the key.
+    `key` turns on the table toolbar — the dataframe widget's own icon strip
+    (👁 columns · ⬇ download · 🔍 search),
+    rebuilt for this table and sitting compactly at its top-right. No
+    fullscreen icon: the table already renders at full height (house rule),
+    so there is nothing more to expand.
     """
+    import csv
+    import re as _re
+    from io import StringIO
+
     import streamlit as st
 
     headers = list(headers)
     if key:
-        with st.popover("🪟 Columns"):
-            shown_cols = [h for h in headers
-                          if st.checkbox(h, True, key="%s_col_%s" % (key, h))]
+        _plain = lambda c: _re.sub(r"<[^>]+>", "", str(c))
+
+        _sp, _c1, _c2, _c3 = st.columns([10, 0.7, 0.7, 0.7],
+                                        vertical_alignment="center")
+        with _c1:
+            with st.popover("👁", help="Show / hide columns"):
+                shown_cols = [h for h in headers
+                              if st.checkbox(h, True,
+                                             key="%s_col_%s" % (key, h))]
+        with _c3:
+            with st.popover("🔍", help="Search this table"):
+                _q = st.text_input("Filter rows", key="%s_q" % key,
+                                   placeholder="type, then Enter",
+                                   label_visibility="collapsed")
+        if _q:
+            _keep = [i for i, r in enumerate(rows)
+                     if _q.lower() in " ".join(_plain(c) for c in r).lower()]
+            rows = [rows[i] for i in _keep]
+            if backgrounds:
+                backgrounds = [backgrounds[i] for i in _keep]
         if shown_cols != headers:
             keep = [i for i, h in enumerate(headers) if h in shown_cols]
             headers = [headers[i] for i in keep]
             rows = [[r[i] for i in keep] for r in rows]
+        with _c2:
+            _buf = StringIO()
+            _w = csv.writer(_buf)
+            _w.writerow(headers)
+            _w.writerows([[_plain(c) for c in r] for r in rows])
+            st.download_button("⬇", _buf.getvalue(),
+                               file_name="%s.csv" % key, mime="text/csv",
+                               key="%s_dl" % key,
+                               help="Download what is shown as CSV")
 
     if index:
         headers = ["#"] + list(headers)
