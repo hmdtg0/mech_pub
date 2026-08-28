@@ -14,7 +14,7 @@ from datetime import datetime
 from utils.auth import require_role
 from utils.google_client import get_gspread_client
 from utils.orders_store import fetch_all_orders, update_order
-from utils import (parts_tracker, project_colors,
+from utils import (holders_store, parts_tracker, project_colors,
                    project_registry, record_builder, stock_store,
                    tracker_orders, tracker_writer, ui)
 from utils.tracker_parse import event_of, holder_of, place_of, to_int
@@ -619,8 +619,25 @@ if _entry_kind.endswith("History entry"):
                                            "latest history row that carries "
                                            "one.")
             with h2:
-                h_from = st.text_input("From", value="")
-                h_to = st.text_input("To", value="")
+                # Directory pickers with a type-a-name escape (Hamid, 28 Aug
+                # interview). A TYPED name is registered in the Holders
+                # directory BEFORE the entry is written — From as a "source"
+                # (a vendor; never counted negative), To as a "person".
+                _holders = holders_store.names()
+                h_from_pick = st.selectbox(
+                    "From", [""] + _holders,
+                    format_func=lambda h: h or "—")
+                h_from_typed = st.text_input(
+                    "…or type a vendor / outside source",
+                    help="A new name is saved to the Holders directory as a "
+                         "'source' before the entry is recorded.")
+                h_to_pick = st.selectbox(
+                    "To", [""] + _holders,
+                    format_func=lambda h: h or "—")
+                h_to_typed = st.text_input(
+                    "…or type a new name",
+                    help="A new name is saved to the Holders directory as a "
+                         "'person' before the entry is recorded.")
                 h_courier = st.text_input("Courier / Tracking", value="")
             with h3:
                 h_qty_ordered = st.text_input("Qty ordered", value="")
@@ -639,9 +656,25 @@ if _entry_kind.endswith("History entry"):
             add_entry = st.form_submit_button("➕ Append to part history",
                                               type="primary")
         if add_entry:
-            if not h_to.strip() and not h_from.strip():
+            h_from = (h_from_typed.strip() or h_from_pick).strip()
+            h_to = (h_to_typed.strip() or h_to_pick).strip()
+            if not h_to and not h_from:
                 st.error("From or To is needed — an entry that names nobody "
                          "records nothing.")
+                st.stop()
+            # A typed name reaches the directory FIRST (Hamid: "make sure
+            # the vendor will be recorded ... before user submits it") — if
+            # that write fails, no entry is recorded at all.
+            _reg = ""
+            if h_from and not holders_store.is_known(h_from):
+                _reg = holders_store.register(
+                    h_from, kind="source", notes="added from Process Order")
+            if not _reg and h_to and not holders_store.is_known(h_to):
+                _reg = holders_store.register(
+                    h_to, kind="person", notes="added from Process Order")
+            if _reg:
+                st.error("Not recorded — the new name could not be saved to "
+                         "the Holders directory first: %s" % _reg)
             else:
                 now = datetime.now()
                 ok, message = tracker_writer.append_history(mcode, {

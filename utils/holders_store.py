@@ -7,8 +7,11 @@ often, nothing here hard-codes a name: every holder the app offers comes from
 this tab, and a holder the tab has never heard of is reported rather than
 quietly accepted.
 
-Read-only. Holders are added on the sheet, not by the app — that is what
-makes the tab authoritative.
+Nearly read-only. Holders are added on the sheet, not by the app — that is
+what makes the tab authoritative — with ONE exception since 28 Aug 2026
+(Hamid): a vendor or new name typed on the entry form is registered here
+by `register()` BEFORE the entry lands, so the directory never lags what
+the ledger says and the stock count knows a "source" from a person.
 """
 from __future__ import annotations
 
@@ -106,6 +109,53 @@ def unknown(used: List[str]) -> List[str]:
         if not is_known(text):
             out.append(text)
     return out
+
+
+def register(name: str, kind: str = "person", notes: str = "") -> str:
+    """Add a name to the Holders tab — the app's one write to the directory.
+
+    The entry form calls this for a TYPED name before it writes the entry
+    (Hamid, 28 Aug: "make sure the vendor will be recorded in the database
+    sheet ... before user submits it"). `kind` matters to the count: a
+    "source" hands goods over and never goes negative; a "person" holds
+    stock. A name the directory already knows is left exactly as it is.
+    Returns "" on success, the problem as text otherwise.
+    """
+    from utils.google_client import with_worksheet
+
+    text = str(name or "").strip()
+    if not text:
+        return "no name given"
+    if is_known(text):
+        return ""
+
+    def _do(ws):
+        values = ws.get_all_values()
+        header = [norm(h) for h in (values[0] if values else [])]
+        if not header:
+            return "the Holders tab has no header row"
+        row = [""] * len(header)
+        placed = False
+        for i, key in enumerate(header):
+            field = _FIELDS.get(key)
+            if field == "name" and not placed:
+                row[i] = text
+                placed = True
+            elif field == "kind":
+                row[i] = kind
+            elif field == "notes" and notes:
+                row[i] = notes
+        if not placed:
+            return "the Holders tab has no name column"
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        return ""
+
+    try:
+        problem = with_worksheet(TAB_HOLDERS, _do, sheet_id=CENTRAL_SHEET_ID)
+    except Exception as exc:
+        return str(exc)
+    refresh()
+    return problem or ""
 
 
 def refresh() -> None:

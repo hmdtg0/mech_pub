@@ -1,23 +1,29 @@
-"""Movements — the Movement Log, newest first and searchable.
+"""Movements — the log: every update to the orders, newest first.
 
-One project or every project, from the sidebar scope. A movement log belongs
-to a project record, so "all projects" cannot be one merged table without
-inventing a shared ordering across four hand-kept sheets; instead each
-project's log is drawn in turn — stacked in full by default, collapsible
-under the second tab (Hamid, 21 Aug: "B as default, but keep the A as
-another tab").
+Redefined 28 Aug 2026 (Hamid: "what goes to movement page is any update
+happens to the orderes, it is like Logs"): the page shows the part-history
+LEDGER itself — every event of every part in scope, raises and receipts
+and QC notes included — not only the rows that moved goods. App-stamped
+rows float to the top newest first (logged-at is the app's own clock);
+migrated rows carry no stamp and follow in ledger order, part by part —
+the dates on those are hand-typed and sorting on them would put the story
+in an order nobody wrote. The record's hand-kept Movement Log tab stays
+readable under its own tab: data is never hidden, it just stopped being
+what this page means.
 """
-import pandas as pd
-import streamlit as st
-
-
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from datetime import datetime
+
+import streamlit as st
+
 from utils.auth import require_auth
-from utils import parts_tracker, project_colors, project_registry
-from utils.ui import (movement_header, render_movement, require_project,
-                      table_height)
+from utils import (overview_board, parts_tracker, project_colors,
+                   project_registry, user_store)
+from utils.tracker_parse import event_of
+from utils.ui import (movement_header, native_table, part_url,
+                      render_movement, require_project)
 
 require_auth()
 
@@ -30,20 +36,23 @@ _registry = project_registry.all_projects()
 _wide = project_registry.is_all()
 sources = list(_registry.items()) if _wide else [(active_name, active_sheet)]
 
-logs = {}
+# --- the log: every history row of every part in scope ----------------------
+entries = []
 for _name, _sid in sources:
-    logs[_name] = parts_tracker.fetch_movements(_sid)
-_every = [m for rows in logs.values() for m in rows]
+    for _code, _part in parts_tracker.fetch_all_parts(_sid).items():
+        for _idx, _row in enumerate(_part.get("history", [])):
+            entries.append(dict(_row, _project=_name, _mcode=_code,
+                                _idx=_idx))
 
-# Short labels (no wrapping) + bottom alignment keeps the row on one baseline.
-c1, c3, c4 = st.columns([3, 1.5, 1.3], vertical_alignment="bottom")
+c1, c2, c3 = st.columns([3, 1.5, 1.3], vertical_alignment="bottom")
 with c1:
-    query = st.text_input("🔍 Search", placeholder="part, person, tracking number, issue…")
+    query = st.text_input("🔍 Search",
+                          placeholder="part, person, vendor, tracking, note…")
+with c2:
+    events = st.multiselect("Event",
+                            sorted({event_of(e) for e in entries
+                                    if event_of(e)}))
 with c3:
-    stages = st.multiselect("Stage",
-                            sorted({m.get("stage", "") for m in _every
-                                    if m.get("stage")}))
-with c4:
     if st.button("🔄 Refresh", use_container_width=True):
         for _name, _sid in sources:
             parts_tracker.refresh(_sid)
@@ -51,127 +60,106 @@ with c4:
 
 if _wide:
     st.markdown("**Projects** — " + " ".join(
-        project_colors.badge_html(name, sheet_id=sid) for name, sid in sources),
-        unsafe_allow_html=True)
+        project_colors.badge_html(name, sheet_id=sid)
+        for name, sid in sources), unsafe_allow_html=True)
 else:
     st.markdown("**Project** — %s"
-                % project_colors.badge_html(active_name,
-                                            "Source: %s" % parts_tracker.source_label(),
-                                            sheet_id=active_sheet),
+                % project_colors.badge_html(
+                    active_name, "Source: %s" % parts_tracker.source_label(),
+                    sheet_id=active_sheet),
                 unsafe_allow_html=True)
 
-if not _every:
-    st.info("No Movement Log rows for %s."
+if not entries:
+    st.info("No history anywhere yet for %s."
             % ("any project" if _wide else "this project"))
     st.stop()
 
-
-def _visible(rows):
-    """The rows this page's filters leave standing, newest first."""
-    view = rows
-    if query:
-        q = query.lower()
-        view = [m for m in view if q in " ".join(str(v) for v in m.values()).lower()]
-    if stages:
-        view = [m for m in view if m.get("stage") in stages]
-    return list(reversed(view))
+view = entries
+if query:
+    _q = query.lower()
+    view = [e for e in view
+            if _q in " ".join(str(v) for v in e.values()).lower()]
+if events:
+    view = [e for e in view if event_of(e) in events]
 
 
-shown = {name: _visible(rows) for name, rows in logs.items()}
-_total = sum(len(rows) for rows in shown.values())
-st.markdown("**%d movements** shown" % _total)
-
-
-def _frame(rows):
-    return pd.DataFrame([{
-        "Date": m.get("date", ""),
-        "Item / Build": m.get("item", ""),
-        "Qty": m.get("qty", ""),
-        "From": m.get("from", ""),
-        "To": m.get("to", ""),
-        "Stage": m.get("stage", ""),
-        "Notes": m.get("notes", ""),
-    } for m in rows])
-
-
-def _table(rows, key, selectable=True, logged=1):
-    """One project's table. Returns the selected row index, or None.
-
-    `logged` is how many rows the project has BEFORE filtering, so an empty
-    block can say which kind of empty it is — a project with no movements at
-    all reads differently from one whose rows the search just excluded.
-
-    Row selection only fires from the checkbox in the left-hand column
-    (it appears on hover): Streamlit's table has no double-click event, and
-    clicking a cell selects the *cell*, not the row. Click-anywhere would
-    need a third-party grid component; see TODO.md.
-    """
-    if not rows:
-        st.caption("No Movement Log rows for this project." if not logged
-                   else "Nothing here matches the current filters.")
-        return None
-    event = st.dataframe(
-        _frame(rows), height=table_height(len(rows)), hide_index=True,
-        on_select="rerun" if selectable else "ignore",
-        selection_mode="single-row", key=key)
-    if not selectable:
-        return None
+def _stamp(row):
+    """The app's own clock, where it stamped one. Hand-typed dates are not
+    parsed — "~12 Jan", "24-30 Jul" — so unstamped rows keep ledger order."""
     try:
-        picked = event["selection"]["rows"]
-    except (TypeError, KeyError):
-        picked = []
-    return picked[0] if picked else None
+        return datetime.strptime(str(row.get("logged_at", "")).strip(),
+                                 "%d %b %Y %H:%M")
+    except ValueError:
+        return None
 
 
-def _notes(rows, opened=None):
-    for i, m in enumerate(rows):
-        with st.expander(movement_header(m), expanded=(i == opened)):
-            render_movement(m)
+_stamped = [e for e in view if _stamp(e)]
+_stamped.sort(key=_stamp, reverse=True)
+_rest = [e for e in view if not _stamp(e)]
+_rest.sort(key=lambda e: (e["_project"],
+                          overview_board.sort_code(e["_mcode"]), -e["_idx"]))
+log = _stamped + _rest
 
+sheet_logs = {name: parts_tracker.fetch_movements(sid)
+              for name, sid in sources}
+_sheet_total = sum(len(rows) for rows in sheet_logs.values())
 
-if not _wide:
-    # One project: exactly the page as it was, selection detail included.
-    rows = shown[active_name]
-    tab_table, tab_notes = st.tabs(["📋 Table View (%d)" % len(rows),
-                                    "🗒️ Full Notes (%d)" % len(rows)])
-    with tab_table:
-        st.caption("Tick the box at the left edge of a row to open its full "
-                   "entry below (and pre-open it in Full Notes).")
-        selected = _table(rows, "movements_table")
-        if selected is not None:
-            st.markdown("---")
-            st.markdown(movement_header(rows[selected]))
-            render_movement(rows[selected])
-    with tab_notes:
-        st.caption("The same rows. A table clips Notes to one line, and the "
-                   "notes are where the tracking numbers, QC verdicts and "
-                   "blockers actually live — here they are in full, as "
-                   "written in the sheet.")
-        _notes(rows, selected)
-else:
-    # Every project: the same table drawn per project, twice over — stacked
-    # in full, and collapsed under its own tab. Row-selection detail is left
-    # out of both: it would need its own state per project per tab, and Full
-    # Notes already carries every word of every row.
-    tab_stacked, tab_by_project, tab_notes = st.tabs([
-        "📋 Stacked (%d)" % _total,
-        "🗂 By project (%d)" % len(sources),
-        "🗒️ Full Notes (%d)" % _total,
-    ])
-    with tab_stacked:
-        for name, _sid in sources:
-            st.markdown("#### %s — %d" % (name, len(shown[name])))
-            _table(shown[name], "moves_stacked_%s" % name, selectable=False,
-                   logged=len(logs[name]))
-    with tab_by_project:
-        for name, _sid in sources:
-            with st.expander("%s — %d movements" % (name, len(shown[name])),
-                             expanded=(name == active_name)):
-                _table(shown[name], "moves_grouped_%s" % name,
-                       selectable=False, logged=len(logs[name]))
-    with tab_notes:
-        st.caption("Every row in full, as written in the sheet, project by "
-                   "project.")
-        for name, _sid in sources:
-            st.markdown("#### %s — %d" % (name, len(shown[name])))
-            _notes(shown[name])
+tab_log, tab_sheet = st.tabs([
+    "📜 Log (%d)" % len(log),
+    "🗒️ Movement Log tab (%d)" % _sheet_total,
+])
+
+with tab_log:
+    st.markdown("**%d updates** shown · %d app-stamped, newest first · "
+                "the rest in ledger order, part by part"
+                % (len(log), len(_stamped)))
+    _heads = ["Project", "M-Code", "Event", "Date", "Qty ordered",
+              "Qty moved", "Qty received", "From", "To",
+              "Courier / Tracking", "QC", "Notes", "Logged by", "Logged at"]
+    _cells = []
+    for e in log:
+        _cells.append([
+            e["_project"],
+            part_url(e["_project"], e["_mcode"]),
+            event_of(e),
+            e.get("date", ""),
+            e.get("qty_ordered", ""),
+            e.get("qty_moved", ""),
+            e.get("qty_received", ""),
+            e.get("place", "") or e.get("from", ""),
+            e.get("holder", "") or e.get("to", ""),
+            e.get("courier", ""),
+            e.get("status", ""),
+            e.get("notes", ""),
+            # The sheet keeps the email; the screen shows the person.
+            user_store.name_of(e.get("logged_by", "")),
+            e.get("logged_at", ""),
+        ])
+    native_table(_heads, _cells, link_col="M-Code")
+    st.caption(
+        "Every ledger line of every part in scope — raises, receipts, "
+        "QC verdicts, holds and corrections included, exactly as the "
+        "record keeps them. The M-Code opens the part on **Part Detail** "
+        "in a new tab."
+    )
+
+with tab_sheet:
+    st.caption("The record's own hand-kept Movement Log tab, as written. "
+               "The log is the page now; this stays readable so nothing "
+               "the team typed is hidden.")
+    for _name, _sid in sources:
+        rows = sheet_logs[_name]
+        st.markdown("#### %s — %d" % (_name, len(rows)))
+        if not rows:
+            st.caption("No Movement Log rows for this project.")
+            continue
+        native_table(
+            ["Date", "Item / Build", "Qty", "From", "To", "Stage", "Notes"],
+            [[m.get("date", ""), m.get("item", ""), m.get("qty", ""),
+              m.get("from", ""), m.get("to", ""), m.get("stage", ""),
+              m.get("notes", "")] for m in reversed(rows)])
+        with st.expander("🗒️ Full notes (%d)" % len(rows)):
+            for m in reversed(rows):
+                st.markdown("**%s**" % movement_header(m))
+                render_movement(m)
+                st.markdown("---")

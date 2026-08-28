@@ -109,6 +109,15 @@ TAB_MOVEMENTS_MERGED = "Movements"
 MOVEMENT_EVENTS = {
     "Order":      {"stock": "in",       "movements": False, "shipments": False},
     "Receipt":    {"stock": "in",       "movements": True,  "shipments": False},
+    # "Hand delivered" replaced Movement and Delivery in the ENTRY vocabulary
+    # (Hamid, 28 Aug: "movement event is very generic"). It is a transfer —
+    # leaves From, arrives at To — and the smart half of the rule lives in
+    # the stock count already: a From whose directory kind is "source" never
+    # goes negative, so a hand-over between holders moves both counts while
+    # an arrival from a registered vendor only adds at To.
+    "Hand delivered": {"stock": "transfer", "movements": True, "shipments": False},
+    # Movement and Delivery stay RECOGNIZED — years of ledger rows carry
+    # them, and reading is forever — they are just never offered again.
     "Movement":   {"stock": "transfer", "movements": True,  "shipments": False},
     "Shipping":   {"stock": "out",      "movements": True,  "shipments": True},
     "Delivery":   {"stock": "in",       "movements": True,  "shipments": True},
@@ -121,9 +130,14 @@ MOVEMENT_EVENTS = {
     "Cancelled":  {"stock": "",         "movements": False, "shipments": False},
 }
 
-# The order they appear in a picker: the ones people reach for most, first.
-EVENT_CHOICES = ["Movement", "Receipt", "Shipping", "Delivery", "QC", "Update",
-                 "Return", "Scrap", "Hold", "Correction", "Cancelled", "Order"]
+# What the ENTRY pickers offer, most-reached-for first — trimmed 28 Aug
+# (Hamid's interview): Movement and Delivery folded into "Hand delivered";
+# Correction, Cancelled and Order left entry entirely (Order lines are
+# written by Order from BOM, Receipt lines by Receive goods; corrections
+# get their own admin path per the proposal). Every legacy name above still
+# READS correctly — this list only governs what can be typed in new.
+EVENT_CHOICES = ["Hand delivered", "Receipt", "Shipping", "QC", "Update",
+                 "Return", "Scrap", "Hold"]
 
 
 def event_rule(event: str) -> dict:
