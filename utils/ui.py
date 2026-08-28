@@ -217,7 +217,8 @@ def part_link(project: str, code: str) -> str:
                escape(code)))
 
 
-def linked_table(headers, rows, backgrounds=None, index: bool = False) -> None:
+def linked_table(headers, rows, backgrounds=None, index: bool = False,
+                 key: str = "") -> None:
     """A colour-codable table whose cells may be real hyperlinks.
 
     st.html, not st.markdown or st.dataframe: the markdown renderer rewrites
@@ -225,8 +226,22 @@ def linked_table(headers, rows, backgrounds=None, index: bool = False) -> None:
     anchor at all. Cells arrive as READY HTML (escape plain text with
     ui.esc(); build links with ui.part_link()). Full height always — tables
     never scroll inside themselves, the page scrolls (house rule, 18 Aug).
+
+    `key` turns on a 🪟 Columns picker (the dataframe toolbar's eye,
+    rebuilt for this table): per-column checkboxes in a popover, remembered
+    in the session under the key.
     """
     import streamlit as st
+
+    headers = list(headers)
+    if key:
+        with st.popover("🪟 Columns"):
+            shown_cols = [h for h in headers
+                          if st.checkbox(h, True, key="%s_col_%s" % (key, h))]
+        if shown_cols != headers:
+            keep = [i for i, h in enumerate(headers) if h in shown_cols]
+            headers = [headers[i] for i in keep]
+            rows = [[r[i] for i in keep] for r in rows]
 
     if index:
         headers = ["#"] + list(headers)

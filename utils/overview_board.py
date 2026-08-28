@@ -75,7 +75,7 @@ LEGEND = (
 )
 
 COLUMNS = ["Project", "M-Code", "Part", "Version", "Owner", "Qty", "Received",
-           "On hand", "From", "From location", "Heading to", "Date", "Courier",
+           "On hand", "From", "From location", "Recipient", "Date", "Courier",
            "Tracking", "ETA / arrived", "Status", "Logged by", "Attention"]
 
 # Within a part: its orders, then what moved, then what stayed behind.
@@ -205,7 +205,7 @@ def _held(part_id: str, project: str, holder: str = ""):
 def _blank(project, mcode, part, version, owner, kind):
     return {"Project": project, "M-Code": mcode or "—", "Part": part or "—",
             "Version": version, "Owner": owner, "Qty": "", "Received": "",
-            "On hand": "", "From": "—", "From location": "", "Heading to": "—",
+            "On hand": "", "From": "—", "From location": "", "Recipient": "—",
             "Date": "", "Courier": "", "Tracking": "", "ETA / arrived": "",
             "Status": "", "Logged by": "", "Attention": "", "_kind": kind}
 
@@ -287,7 +287,7 @@ def rows(orders: Optional[List[dict]] = None, legs: Optional[List[dict]] = None,
             "On hand": on_hand(project, code),
             "From": order.get("ordered_by", "") or "—",
             "From location": holders_store.location_of(order.get("ordered_by", "")),
-            "Heading to": order.get("recipient", "") or "—",
+            "Recipient": order.get("recipient", "") or "—",
             "Date": order.get("date", ""),
             "ETA / arrived": order.get("eta", ""),
             "Status": status,
@@ -324,7 +324,7 @@ def rows(orders: Optional[List[dict]] = None, legs: Optional[List[dict]] = None,
                 "On hand": on_hand(project, code),
                 "From": leg.get("from", "") or "—",
                 "From location": holders_store.location_of(leg.get("from", "")),
-                "Heading to": leg.get("to", "") or "—",
+                "Recipient": leg.get("to", "") or "—",
                 "Date": leg.get("date", ""),
                 "Logged by": leg.get("logged_by", ""),
             })
@@ -346,7 +346,7 @@ def rows(orders: Optional[List[dict]] = None, legs: Optional[List[dict]] = None,
                              group[0][1])
                 courier, tracking, _eta, _note = courier_of(first)
                 out.append(leg_row(first, Courier=courier, Tracking=tracking, **{
-                    "Heading to": dest or "—",
+                    "Recipient": dest or "—",
                     "Qty": merge_qty([qty_cell((arr or l).get("qty"))
                                       for l, arr in group]),
                     "Date": ", ".join(sorted({l.get("date", "")

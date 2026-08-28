@@ -90,7 +90,7 @@ for r in rows:
         else ui.esc(r.get(col, ""))
         for col in overview_board.COLUMNS])
     _bg.append(overview_board.COLOURS.get(r["Status"], ""))
-ui.linked_table(overview_board.COLUMNS, _cells, _bg)
+ui.linked_table(overview_board.COLUMNS, _cells, _bg, key="ov")
 
 st.caption(overview_board.LEGEND)
 st.caption(
