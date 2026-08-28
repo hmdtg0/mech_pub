@@ -78,19 +78,60 @@ st.markdown("**Projects** — " + " ".join(
     for name in sorted({r["Project"] for r in rows})), unsafe_allow_html=True)
 
 
-# The shared linked_table: every M-Code is a same-tab jump to Part Detail,
-# rows painted from the one palette. (The old st.dataframe could not carry
-# an anchor at all.)
-_cells, _bg = [], []
-for r in rows:
-    _cells.append([
-        ui.part_link(r["Project"], r["M-Code"]) if col == "M-Code"
-        # The sheet keeps the email; the screen shows the person.
-        else ui.esc(user_store.name_of(r.get(col, ""))) if col == "Logged by"
-        else ui.esc(r.get(col, ""))
-        for col in overview_board.COLUMNS])
-    _bg.append(overview_board.COLOURS.get(r["Status"], ""))
-ui.linked_table(overview_board.COLUMNS, _cells, _bg, key="ov")
+# Two renderers, side by side while Hamid compares (24 Aug). B — the native
+# grid — is the default: real toolbar (eye, download, search, fullscreen),
+# column sort and resize, M-Code as a LinkColumn built from ABSOLUTE urls
+# (the grid ignores relative ones); its links always open a NEW tab, which
+# is the widget's hard-coded behaviour. A — the hand-built table — keeps
+# same-tab links and our rebuilt toolbar.
+_engine = st.radio("Table engine", ["🅱 Native grid", "🅰 Custom"],
+                   horizontal=True, key="ov_engine",
+                   label_visibility="collapsed")
+
+if _engine.endswith("Custom"):
+    _cells, _bg = [], []
+    for r in rows:
+        _cells.append([
+            ui.part_link(r["Project"], r["M-Code"]) if col == "M-Code"
+            # The sheet keeps the email; the screen shows the person.
+            else ui.esc(user_store.name_of(r.get(col, ""))) if col == "Logged by"
+            else ui.esc(r.get(col, ""))
+            for col in overview_board.COLUMNS])
+        _bg.append(overview_board.COLOURS.get(r["Status"], ""))
+    ui.linked_table(overview_board.COLUMNS, _cells, _bg, key="ov")
+else:
+    _records = []
+    for r in rows:
+        rec = {col: str(r.get(col, "")) for col in overview_board.COLUMNS}
+        rec["M-Code"] = ui.part_url(r["Project"], r["M-Code"])
+        rec["Logged by"] = user_store.name_of(r.get("Logged by", ""))
+        _records.append(rec)
+    _df = pd.DataFrame(_records)[overview_board.COLUMNS]
+    _bg = [overview_board.COLOURS.get(r["Status"], "") for r in rows]
+
+    def _paint(row):
+        return ["background-color: %s" % _bg[row.name]] * len(row)
+
+    def _code_of(url):
+        # The Styler's display layer overrides LinkColumn.display_text on
+        # this Streamlit, so the code-instead-of-URL text comes from the
+        # Styler itself — the one place that coexists with the row colours.
+        from urllib.parse import parse_qs, urlparse
+        try:
+            return parse_qs(urlparse(str(url)).query).get("part", [""])[0]
+        except Exception:
+            return str(url)
+
+    st.dataframe(
+        _df.style.apply(_paint, axis=1).format(_code_of, subset=["M-Code"]),
+        hide_index=True,
+        height=ui.table_height(len(_df)), use_container_width=True,
+        column_config={
+            "M-Code": st.column_config.LinkColumn(
+                "M-Code",
+                help="Opens the part on Part Detail — the grid always opens "
+                     "links in a new tab."),
+        })
 
 st.caption(overview_board.LEGEND)
 st.caption(

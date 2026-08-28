@@ -301,3 +301,36 @@ def esc(text) -> str:
     """Plain text, made safe for a linked_table cell."""
     from html import escape
     return escape(str(text if text is not None else ""))
+
+
+def absolute_url(path_and_query: str) -> str:
+    """This request's own origin, in front of an app path.
+
+    The native grid's LinkColumn only linkifies ABSOLUTE URLs — a relative
+    one degrades to raw text (learned the hard way, 24 Aug). The origin is
+    read per-request from the headers, so the same code addresses
+    localhost:8502 and mech-order.streamlit.app without knowing either.
+    """
+    import streamlit as st
+
+    try:
+        headers = st.context.headers
+        host = headers.get("Host", "")
+        scheme = headers.get("X-Forwarded-Proto", "") or (
+            "https" if not host.startswith("localhost") else "http")
+    except Exception:
+        host, scheme = "", ""
+    if not host:
+        return path_and_query
+    return "%s://%s/%s" % (scheme, host, path_and_query.lstrip("/"))
+
+
+def part_url(project: str, code: str) -> str:
+    """The bare address part_link() wraps — for LinkColumn cells."""
+    from urllib.parse import quote
+
+    code = str(code or "").strip()
+    if not code or code == "\u2014":
+        return ""
+    return absolute_url("tracker_part_detail?project=%s&part=%s"
+                        % (quote(str(project or "")), quote(code)))
