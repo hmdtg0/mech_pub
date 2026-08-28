@@ -378,6 +378,8 @@ for o in all_orders:
         "who": o.get("EngineerName", ""),
         "text": " ".join([o.get("PartName", ""), o.get("PartID", ""), _oid]),
         "when": o.get("CreatedAt", ""),
+        "project": (o.get("Project") or "").strip(),
+        "code": (o.get("PartID") or (_t.get("mcode", "") if _t else "")).strip(),
     })
 for _t in _ledger_only:
     entries.append({
@@ -389,6 +391,8 @@ for _t in _ledger_only:
         "text": " ".join([_t.get("mcode", ""), _t.get("part_name", ""),
                           str(_t.get("order_id", ""))]),
         "when": "",
+        "project": _t.get("project", ""),
+        "code": _t.get("mcode", ""),
     })
 
 if not entries:
@@ -414,17 +418,17 @@ st.markdown("---")
 # --- Filters ---
 col_f1, col_f2, col_f3, col_f4 = st.columns(4)
 with col_f1:
-    status_filter = st.selectbox("Status", ["all"] + _statuses, index=0,
-                                 key="ao_status")
-with col_f2:
-    priority_filter = st.selectbox("Priority", ["all", "URGENT", "Normal"],
-                                   key="ao_priority")
-with col_f3:
-    _names = sorted({e["who"] for e in entries if e["who"]})
-    who_filter = st.selectbox("Raised by", ["all"] + _names, key="ao_engineer")
-with col_f4:
     search = st.text_input("Search part / order id",
                            placeholder="Type to filter...", key="ao_search")
+with col_f2:
+    status_filter = st.selectbox("Status", ["all"] + _statuses, index=0,
+                                 key="ao_status")
+with col_f3:
+    priority_filter = st.selectbox("Priority", ["all", "URGENT", "Normal"],
+                                   key="ao_priority")
+with col_f4:
+    _names = sorted({e["who"] for e in entries if e["who"]})
+    who_filter = st.selectbox("Raised by", ["all"] + _names, key="ao_engineer")
 
 view = entries
 if status_filter != "all":
@@ -437,27 +441,23 @@ if search:
     _s = search.lower()
     view = [e for e in view if _s in e["text"].lower()]
 
-# Sort: open before closed; URGENT first among the open; app entries newest
-# first, then ledger-only history in part order. The status chip on every
-# card says which band a row is in — an ordering, not a split.
-def _band(e):
-    if e["status"] in _closed:
-        return 2
-    return 0 if e["priority"] == "URGENT" else 1
-
-# App entries sort newest first (CreatedAt is ISO, so text order IS date
-# order) and ledger-only entries carry when="" so they follow, keeping the
-# tab order they were read in — their own dates are hand-typed and unsortable.
-# The final stable sort puts the bands in order without disturbing either.
+# Global project indexing (Hamid, 24 Aug): every listing walks the BOM the
+# same way — by part code within the project, exactly as the Overview page
+# does — so row 7 here is the same part as row 7 there. Cards and table
+# share this one order; status shows in the chip and the row colour, not in
+# the position. Same-part orders keep newest first; codeless app orders
+# close each project's block.
 view.sort(key=lambda e: e["when"], reverse=True)
-view.sort(key=_band)
+view.sort(key=lambda e: (e["project"],
+                         overview_board.sort_code(e["code"] or "￿")))
 
-_joined = sum(1 for e in entries if e["kind"] == "app" and e["thread"])
-st.markdown("**%d orders** shown · %d in both records · %d app-only "
-            "· %d ledger-only (pre-app history)"
-            % (len(view), _joined,
-               sum(1 for e in entries if e["kind"] == "app" and not e["thread"]),
-               len(_ledger_only)))
+_bits = ["**%d orders** shown" % len(view)]
+_app_only = sum(1 for e in entries if e["kind"] == "app" and not e["thread"])
+if _app_only:
+    _bits.append("%d app-only" % _app_only)
+if _ledger_only:
+    _bits.append("%d ledger-only (pre-app history)" % len(_ledger_only))
+st.markdown(" · ".join(_bits))
 st.markdown("---")
 
 # --- Two views of the same filtered list: cards, and one row per order ------
