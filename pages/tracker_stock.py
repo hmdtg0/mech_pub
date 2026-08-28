@@ -133,18 +133,18 @@ t1, t2, t3, t4 = st.tabs([
 
 with t1:
     if shown:
-        from utils.ui import esc, linked_table, part_link
+        from utils.ui import native_table, part_url
         _heads = ["Part ID", "Description", "Type", "Holder", "Where",
                   "Qty on hand", "Last counted", "Notes"]
-        linked_table(_heads, [[
-            part_link(r.get("project", "") or active_name,
-                      r.get("part_id", "")) or "—",
-            esc(r.get("description", "")), esc(r.get("type", "")),
-            esc(r.get("holder", "")),
-            esc(holders_store.location_of(r.get("holder", "")) or "—"),
-            esc(to_int(r.get("qty", ""))), esc(r.get("last_counted", "")),
-            esc(r.get("notes", "")),
-        ] for r in shown])
+        native_table(_heads, [[
+            part_url(r.get("project", "") or active_name,
+                     r.get("part_id", "")) or "—",
+            r.get("description", ""), r.get("type", ""),
+            r.get("holder", ""),
+            holders_store.location_of(r.get("holder", "")) or "—",
+            to_int(r.get("qty", "")), r.get("last_counted", ""),
+            r.get("notes", ""),
+        ] for r in shown], link_col="Part ID")
         st.caption("A dash in Part ID means the row states a holder's total "
                    "without saying which parts make it up.")
     else:
@@ -182,15 +182,16 @@ with t2:
 
 with t3:
     if shown_history:
-        from utils.ui import esc, linked_table, part_link
-        linked_table(
+        from utils.ui import native_table, part_url
+        native_table(
             ["Date", "Part ID", "Description", "Qty", "From", "To", "Notes"],
-            [[esc(h.get("last_counted", "")),
-              part_link(h.get("project", "") or active_name,
-                        h.get("part_id", "")),
-              esc(h.get("description", "")), esc(to_int(h.get("qty", ""))),
-              esc(h.get("holder", "")), esc(h.get("sent_to", "")),
-              esc(h.get("notes", ""))] for h in shown_history])
+            [[h.get("last_counted", ""),
+              part_url(h.get("project", "") or active_name,
+                       h.get("part_id", "")),
+              h.get("description", ""), to_int(h.get("qty", "")),
+              h.get("holder", ""), h.get("sent_to", ""),
+              h.get("notes", "")] for h in shown_history],
+            link_col="Part ID")
         st.caption("“(external)” means the goods arrived from a supplier "
                    "rather than moving between two holders.")
     else:

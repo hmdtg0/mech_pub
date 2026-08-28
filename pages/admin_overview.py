@@ -10,7 +10,6 @@ filters and draws them.
 Read-only. Orders are raised on Order from BOM, movements recorded on
 Process Order.
 """
-import pandas as pd
 import streamlit as st
 
 import sys, os
@@ -78,48 +77,21 @@ st.markdown("**Projects** — " + " ".join(
     for name in sorted({r["Project"] for r in rows})), unsafe_allow_html=True)
 
 
-# The native grid — Hamid's pick after the two-engine trial (28 Aug).
-# M-Code is a LinkColumn built from ABSOLUTE urls (the grid ignores
-# relative ones) and always opens a NEW tab — the widget's hard-coded
-# behaviour at any version.
-_records = []
+# The native grid, via the one shared renderer (ui.native_table, 28 Aug —
+# Hamid's engine verdict, applied app-wide). M-Code opens Part Detail in a
+# NEW tab; a courier's name in Status means in transit; row colour always
+# comes from the real status.
+_cells, _bg = [], []
 for r in rows:
-    rec = {col: str(r.get(col, "")) for col in overview_board.COLUMNS}
-    rec["M-Code"] = ui.part_url(r["Project"], r["M-Code"])
-    # The sheet keeps the email; the screen shows the person.
-    rec["Logged by"] = user_store.name_of(r.get("Logged by", ""))
-    # A courier's name here MEANS in transit; colour stays on the real status.
-    rec["Status"] = overview_board.status_label(r)
-    _records.append(rec)
-_df = pd.DataFrame(_records)[overview_board.COLUMNS]
-_bg = [overview_board.COLOURS.get(r["Status"], "") for r in rows]
-
-
-def _paint(row):
-    return ["background-color: %s" % _bg[row.name]] * len(row)
-
-
-def _code_of(url):
-    # The Styler's display layer overrides LinkColumn.display_text on
-    # this Streamlit, so the code-instead-of-URL text comes from the
-    # Styler itself — the one place that coexists with the row colours.
-    from urllib.parse import parse_qs, urlparse
-    try:
-        return parse_qs(urlparse(str(url)).query).get("part", [""])[0]
-    except Exception:
-        return str(url)
-
-
-st.dataframe(
-    _df.style.apply(_paint, axis=1).format(_code_of, subset=["M-Code"]),
-    hide_index=True,
-    height=ui.table_height(len(_df)), use_container_width=True,
-    column_config={
-        "M-Code": st.column_config.LinkColumn(
-            "M-Code",
-            help="Opens the part on Part Detail — the grid always opens "
-                 "links in a new tab."),
-    })
+    _cells.append([
+        ui.part_url(r["Project"], r["M-Code"]) if col == "M-Code"
+        # The sheet keeps the email; the screen shows the person.
+        else user_store.name_of(r.get(col, "")) if col == "Logged by"
+        else overview_board.status_label(r) if col == "Status"
+        else str(r.get(col, ""))
+        for col in overview_board.COLUMNS])
+    _bg.append(overview_board.COLOURS.get(r["Status"], ""))
+ui.native_table(overview_board.COLUMNS, _cells, _bg, link_col="M-Code")
 
 st.caption(overview_board.LEGEND)
 st.caption(

@@ -201,106 +201,69 @@ def require_single_project(purpose: str = "This page"):
     st.stop()
 
 
-def part_link(project: str, code: str) -> str:
-    """The one way a table cell jumps to a part: a same-tab anchor to Part
-    Detail, carried by address (?project=&part=, consumed there and cleared).
-    Every page uses THIS so the behaviour cannot fork per table."""
-    from html import escape
-    from urllib.parse import quote
+def native_table(columns, rows, backgrounds=None, link_col: str = "",
+                 index: bool = False) -> None:
+    """The ONE table renderer: the native grid, app-wide (Hamid, 28 Aug \u2014
+    "make sure the native table view is globally across the app").
 
-    code = str(code or "").strip()
-    if not code or code == "\u2014":
-        return escape(code)
-    return ('<a href="tracker_part_detail?project=%s&part=%s" '
-            'title="Open %s on Part Detail">%s</a>'
-            % (quote(str(project or "")), quote(code), escape(code),
-               escape(code)))
+    `rows` is a list of lists in `columns` order, plain values throughout \u2014
+    no HTML. `link_col` names the column whose cells are ABSOLUTE part urls
+    (build them with ui.part_url()); the grid shows the ?part= code instead
+    of the url and opens it in a NEW tab \u2014 the widget hard-codes that at
+    any version, and it ignores relative urls entirely. A non-url cell in
+    that column ("\u2014", "") stays plain text. `backgrounds` paints whole rows
+    (css colour per row, "" for none). `index` numbers rows 1..n in a
+    leading "#" column. Full height always \u2014 tables never scroll inside
+    themselves, the page scrolls (house rule, 18 Aug).
 
-
-def linked_table(headers, rows, backgrounds=None, index: bool = False,
-                 key: str = "") -> None:
-    """A colour-codable table whose cells may be real hyperlinks.
-
-    st.html, not st.markdown or st.dataframe: the markdown renderer rewrites
-    every anchor to target="_blank", and the dataframe cannot render an
-    anchor at all. Cells arrive as READY HTML (escape plain text with
-    ui.esc(); build links with ui.part_link()). Full height always — tables
-    never scroll inside themselves, the page scrolls (house rule, 18 Aug).
-
-    `key` turns on the table toolbar — the dataframe widget's own icon strip
-    (👁 columns · ⬇ download · 🔍 search),
-    rebuilt for this table and sitting compactly at its top-right. No
-    fullscreen icon: the table already renders at full height (house rule),
-    so there is nothing more to expand.
+    A column whose every value is an int stays numeric so the grid's
+    sort-by-click sorts 20 before 100; anything mixed becomes text.
     """
-    import csv
-    import re as _re
-    from io import StringIO
-
+    import pandas as pd
     import streamlit as st
 
-    headers = list(headers)
-    if key:
-        _plain = lambda c: _re.sub(r"<[^>]+>", "", str(c))
-
-        _sp, _c1, _c2, _c3 = st.columns([10, 0.7, 0.7, 0.7],
-                                        vertical_alignment="center")
-        with _c1:
-            with st.popover("👁", help="Show / hide columns"):
-                shown_cols = [h for h in headers
-                              if st.checkbox(h, True,
-                                             key="%s_col_%s" % (key, h))]
-        with _c3:
-            with st.popover("🔍", help="Search this table"):
-                _q = st.text_input("Filter rows", key="%s_q" % key,
-                                   placeholder="type, then Enter",
-                                   label_visibility="collapsed")
-        if _q:
-            _keep = [i for i, r in enumerate(rows)
-                     if _q.lower() in " ".join(_plain(c) for c in r).lower()]
-            rows = [rows[i] for i in _keep]
-            if backgrounds:
-                backgrounds = [backgrounds[i] for i in _keep]
-        if shown_cols != headers:
-            keep = [i for i, h in enumerate(headers) if h in shown_cols]
-            headers = [headers[i] for i in keep]
-            rows = [[r[i] for i in keep] for r in rows]
-        with _c2:
-            _buf = StringIO()
-            _w = csv.writer(_buf)
-            _w.writerow(headers)
-            _w.writerows([[_plain(c) for c in r] for r in rows])
-            st.download_button("⬇", _buf.getvalue(),
-                               file_name="%s.csv" % key, mime="text/csv",
-                               key="%s_dl" % key,
-                               help="Download what is shown as CSV")
-
+    columns = list(columns)
+    rows = [list(r) for r in rows]
     if index:
-        headers = ["#"] + list(headers)
-        rows = [[str(i)] + list(r) for i, r in enumerate(rows, start=1)]
-    body = []
-    for i, cells in enumerate(rows):
-        bg = backgrounds[i] if backgrounds else ""
-        body.append('<tr%s>%s</tr>'
-                    % (' style="background:%s"' % bg if bg else "",
-                       "".join("<td>%s</td>" % c for c in cells)))
-    st.html(
-        '<table class="mech-table" style="width:100%%;'
-        'border-collapse:collapse;font-size:13px">'
-        '<thead><tr style="background:#fafafa">%s</tr></thead>'
-        '<tbody>%s</tbody></table>'
-        '<style>.mech-table td, .mech-table th '
-        '{padding:5px 10px; border-bottom:1px solid #e6e6e6; text-align:left;}'
-        ' .mech-table th {font-weight:600; color:#555; '
-        'border-bottom:1px solid #d5d5d5;} '
-        '.mech-table a {color:#1a73e8; text-decoration:underline;}</style>'
-        % ("".join("<th>%s</th>" % h for h in headers), "".join(body)))
+        columns = ["#"] + columns
+        rows = [[i] + r for i, r in enumerate(rows, start=1)]
+    df = pd.DataFrame(rows, columns=columns) if rows else \
+        pd.DataFrame(columns=columns)
+    for col in df.columns:
+        vals = df[col].tolist()
+        if not all(isinstance(v, int) for v in vals):
+            df[col] = ["" if v is None else str(v) for v in vals]
 
+    styler = df.style
+    if backgrounds:
+        _bg = list(backgrounds)
 
-def esc(text) -> str:
-    """Plain text, made safe for a linked_table cell."""
-    from html import escape
-    return escape(str(text if text is not None else ""))
+        def _paint(row):
+            colour = _bg[row.name] if row.name < len(_bg) else ""
+            return (["background-color: %s" % colour if colour else ""]
+                    * len(row))
+
+        styler = styler.apply(_paint, axis=1)
+    config = {}
+    if link_col:
+        def _code_of(url):
+            # The Styler's display layer overrides LinkColumn.display_text
+            # on this Streamlit, so the code-instead-of-URL text comes from
+            # the Styler itself \u2014 the one place that coexists with the row
+            # colours. Non-url cells ("\u2014", "") pass through unchanged.
+            from urllib.parse import parse_qs, urlparse
+            try:
+                return (parse_qs(urlparse(str(url)).query)
+                        .get("part", [""])[0] or str(url))
+            except Exception:
+                return str(url)
+
+        styler = styler.format(_code_of, subset=[link_col])
+        config[link_col] = st.column_config.LinkColumn(
+            link_col, help="Opens the part on Part Detail \u2014 the grid always "
+                           "opens links in a new tab.")
+    st.dataframe(styler, hide_index=True, height=table_height(len(df)),
+                 use_container_width=True, column_config=config or None)
 
 
 def absolute_url(path_and_query: str) -> str:
@@ -326,7 +289,7 @@ def absolute_url(path_and_query: str) -> str:
 
 
 def part_url(project: str, code: str) -> str:
-    """The bare address part_link() wraps — for LinkColumn cells."""
+    """A part's absolute address — what native_table's link_col cells hold."""
     from urllib.parse import quote
 
     code = str(code or "").strip()

@@ -371,23 +371,23 @@ with tab_ontrack:
     _section(on_track, "ontrack", "No parts in this group.")
 
 with tab_table:
-    # The shared linked_table: M-Code jumps to Part Detail in this tab, rows
-    # keep the page's red/green attention colours.
+    # The shared ui.native_table — the one grid everywhere (28 Aug): M-Code
+    # opens Part Detail in a new tab, rows keep the red/green colours.
     _heads = ["Project", "M-Code", "Part", "Category", "Version",
               "Latest status", "Ordered", "Received", "On hand", "ETA",
               "Location", "Holder", "Attention", "Notes"]
     if view:
-        from utils.ui import esc, linked_table, part_link
+        from utils.ui import native_table, part_url
         _cells = [[
-            esc(project_colors.tag(p["project"])),
-            part_link(p["project"], p["mcode"]),
-            esc(p["part_name"]), esc(p["category"]), esc(p["version"]),
-            esc(p["status"]), esc(p["ordered"]), esc(p["received"]),
-            esc(p["on_hand"]), esc(p["eta"]), esc(p["location"]),
-            esc(p["holder"]), esc(" · ".join(p["flags"])), esc(p["notes"]),
+            project_colors.tag(p["project"]),
+            part_url(p["project"], p["mcode"]),
+            p["part_name"], p["category"], p["version"],
+            p["status"], p["ordered"], p["received"],
+            p["on_hand"], p["eta"], p["location"],
+            p["holder"], " · ".join(p["flags"]), p["notes"],
         ] for p in view]
         _bg = ["#f8d7da" if p["flags"] else "#d4edda" for p in view]
-        linked_table(_heads, _cells, _bg)
+        native_table(_heads, _cells, _bg, link_col="M-Code")
     else:
         st.info("No parts match the current filters.")
 

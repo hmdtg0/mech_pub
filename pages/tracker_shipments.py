@@ -96,7 +96,7 @@ tab_moves, tab_courier, tab_gaps = st.tabs([
 
 with tab_moves:
     if view:
-        from utils.ui import esc, linked_table, part_link
+        from utils.ui import native_table, part_url
         _heads = ["Date", "Project", "Event", "Part", "Description", "Qty",
                   "From", "To", "Tracking (same day)", "Notes"]
         _cells = []
@@ -104,17 +104,17 @@ with tab_moves:
                 r.get("date", "")) or (0, 0), reverse=True):
             leads = shipments_store.same_day(r.get("date", ""))
             _cells.append([
-                esc(r.get("date", "")), esc(r.get("project", "")),
-                esc(r.get("event", "")),
-                part_link(r.get("project", ""), r.get("part_id", ""))
+                r.get("date", ""), r.get("project", ""),
+                r.get("event", ""),
+                part_url(r.get("project", ""), r.get("part_id", ""))
                 or "—",
-                esc(r.get("description", "")), esc(r.get("qty", "")),
-                esc(r.get("from", "")), esc(r.get("to", "")),
-                esc("; ".join(c.get("tracking", "") for c in leads
-                              if c.get("tracking")) or "—"),
-                esc(r.get("notes", "")),
+                r.get("description", ""), r.get("qty", ""),
+                r.get("from", ""), r.get("to", ""),
+                "; ".join(c.get("tracking", "") for c in leads
+                          if c.get("tracking")) or "—",
+                r.get("notes", ""),
             ])
-        linked_table(_heads, _cells)
+        native_table(_heads, _cells, link_col="Part")
         st.caption("“Tracking (same day)” is a courier record posted on the "
                    "same date — a lead to confirm, not a stated fact. A dash "
                    "in Part means the row records a batch rather than one "

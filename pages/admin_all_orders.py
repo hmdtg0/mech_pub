@@ -488,8 +488,8 @@ with tab_cards:
 
 with tab_table:
     # One row per order, both record systems, same filters as the cards.
-    # Rendered by the shared ui.linked_table so the M-Code jump and the house
-    # rules (full height, no inner scroll, same-tab anchors) hold everywhere.
+    # Rendered by the shared ui.native_table — the one grid everywhere
+    # (Hamid, 28 Aug); its M-Code links open Part Detail in a new tab.
     _paint_by = {
         "new": overview_board.COLOURS[overview_board.ORDERED],
         "processing": overview_board.COLOURS[overview_board.ORDERED],
@@ -505,27 +505,27 @@ with tab_table:
     for e in view:
         o, t = e.get("order") or {}, e.get("thread") or {}
         _cells.append([
-            ui.esc(e["project"]),
-            ui.part_link(e["project"], e["code"]),
-            ui.esc(o.get("PartName", "") or t.get("part_name", "")),
-            ui.esc(o.get("Version", "") or t.get("version", "")),
-            ui.esc((o.get("OrderID", "") if o else "")
-                   or str(t.get("order_id", ""))),
-            ui.esc(e["when"] or t.get("date", "")),
-            ui.esc(str(t.get("qty_ordered", "") if t
-                       else o.get("Quantity", ""))),
-            ui.esc(str(t.get("qty_received", "")) if t else ""),
-            ui.esc(e["status"]),
-            ui.esc(e["priority"] if e["kind"] == "app" else ""),
-            ui.esc(e["who"]),
-            ui.esc((o.get("Recipient", "") if o else t.get("recipient", ""))),
+            e["project"],
+            ui.part_url(e["project"], e["code"]),
+            o.get("PartName", "") or t.get("part_name", ""),
+            o.get("Version", "") or t.get("version", ""),
+            (o.get("OrderID", "") if o else "")
+            or str(t.get("order_id", "")),
+            e["when"] or t.get("date", ""),
+            str(t.get("qty_ordered", "") if t
+                else o.get("Quantity", "")),
+            str(t.get("qty_received", "")) if t else "",
+            e["status"],
+            e["priority"] if e["kind"] == "app" else "",
+            e["who"],
+            (o.get("Recipient", "") if o else t.get("recipient", "")),
         ])
         _bg.append(_paint_by.get(e["status"], "#ffffff"))
-    ui.linked_table(_heads, _cells, _bg, index=True)
+    ui.native_table(_heads, _cells, _bg, link_col="M-Code", index=True)
 
     st.caption(overview_board.LEGEND)
     st.caption(
-        "The M-Code opens the part on **Part Detail** in one click. Statuses "
+        "The M-Code opens the part on **Part Detail** in a new tab. Statuses "
         "are reconciled with the part ledger: a receipt on the sheet moves "
         "an order forward even before anyone updates the Orders tab."
     )
