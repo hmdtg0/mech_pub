@@ -559,9 +559,3 @@ with tab_table:
         "are reconciled with the part ledger: a receipt on the sheet moves "
         "an order forward even before anyone updates the Orders tab."
     )
-    st.caption(
-        "🟩 light green — open: new, processing or ordered · "
-        "shipped keeps the same open green · 🟢 green — "
-        "delivered · ⬜ grey — cancelled. Statuses are reconciled "
-        "with the part ledger: a receipt on the sheet moves an order forward "
-        "even before anyone updates the Orders tab.")
