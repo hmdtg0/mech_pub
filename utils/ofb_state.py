@@ -76,3 +76,24 @@ def carry_over(harvested: dict, last_units, last_eta) -> dict:
             rec.pop("ETA", None)
         out[pid] = rec
     return out
+
+
+def autosave_due(current, baseline, last_saved, last_ts, now_ts,
+                 min_gap: float = 20.0) -> bool:
+    """Whether the rolling autosave should write now (Hamid, 28 Aug:
+    "can we have autosaved it?").
+
+    Never for a state already saved; never for the untouched baseline
+    before anything was ever saved (a freshly opened page is not worth a
+    draft); never inside the debounce window — each save is a handful of
+    API calls against the live workbook, not a keystroke. A state edited
+    BACK to the baseline after a save still writes: the draft must follow
+    the person, not argue with them.
+    """
+    if current == last_saved:
+        return False
+    if last_saved is None and current == baseline:
+        return False
+    if last_ts is not None and (now_ts - last_ts) < min_gap:
+        return False
+    return True

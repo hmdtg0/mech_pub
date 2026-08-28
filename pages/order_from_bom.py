@@ -17,6 +17,8 @@ heading's tinted bar is where the colour lives (its emoji glyph was dropped
 import json
 import os
 import sys
+import time
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -24,7 +26,7 @@ import streamlit.components.v1 as components
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from utils.auth import require_auth
+from utils.auth import impersonation_block, require_auth
 from utils import (agent_entry, app_settings, bom_sheet, bulk_orders,
                    ofb_state, order_drafts, parts_model, parts_tracker,
                    project_colors, project_registry, tracker_orders)
@@ -75,6 +77,10 @@ def _load_working_set() -> dict:
 _ws = st.session_state.get("ofb_working")
 if not _ws or _ws.get("scope") != (project, record_id, bom_id):
     _ws = st.session_state["ofb_working"] = _load_working_set()
+    # A fresh working set is a fresh autosave story too.
+    for _k in ("ofb_auto_base", "ofb_auto_pending", "ofb_auto_saved",
+               "ofb_auto_ts", "ofb_auto_at", "ofb_auto_note"):
+        st.session_state.pop(_k, None)
 build_tab = _ws["build_tab"]
 bom_rows = _ws["bom_rows"]
 if not bom_rows:
@@ -85,12 +91,20 @@ if not bom_rows:
 project_scope("Every order submitted on this page is filed to THIS "
               "project's record and read from its BOM — check it before a "
               "mass submit, not after.")
-_head1, _head2 = st.columns([5, 1.3], vertical_alignment="center")
+_head1, _head2, _head3 = st.columns([4.4, 1.2, 1.2],
+                                    vertical_alignment="center")
 _head1.markdown("Reading **%d parts** from `%s`." % (len(bom_rows), build_tab))
 _refresh_clicked = _head2.button(
     "↻ Refresh", key="ofb_refresh", use_container_width=True,
     help="Re-read the BOM, order statuses and drafts (they load once per "
          "visit). Your table entries are kept — matched by Part ID.")
+# One Save, auto-named (Hamid, 28 Aug: "we only need a save button as the
+# naming is already automated") — it writes the same per-person draft the
+# autosave keeps, just NOW. Handled below once the grids have reported.
+_save_clicked = _head3.button(
+    "💾 Save", key="ofb_save_now", use_container_width=True,
+    help="Write your current selection to your draft right now — it also "
+         "autosaves every ~25 s once you edit. The PM loads it from 📂.")
 
 
 def _int(value) -> int:
@@ -132,10 +146,17 @@ if _pending:
     st.session_state["ofb_build"] = _pending["build"]
     st.session_state["ofb_seed"] = _pending["seed"]
     st.session_state["ofb_loaded_draft"] = _pending["name"]
+    # The seed's signature carries no default ETA (drafts never store one),
+    # so a §1 ETA left over from this session would kill the seed on sight.
+    st.session_state["ofb_eta"] = None
     for _k in [k for k in st.session_state if str(k).startswith("ofb_grid_")]:
         st.session_state.pop(_k, None)
     st.session_state.pop("ofb_frames", None)
     st.session_state.pop("ofb_nonce", None)
+    # A freshly loaded draft is the new autosave baseline — loading alone
+    # must not spawn an autosave copy of it.
+    st.session_state.pop("ofb_auto_base", None)
+    st.session_state.pop("ofb_auto_pending", None)
 
 # --- Drafts: the hand-off between whoever fills and whoever submits ---------
 # An engineer fills the selection and SAVES it; the PM loads it here, reviews
@@ -655,6 +676,88 @@ for type_name, frame in edited_by_type.items():
 st.markdown("**%d of %d parts selected.**" % (len(chosen), len(rows)))
 
 # ============================================================
+# Autosave — the current selection, kept without being asked
+# ============================================================
+# Hamid, 28 Aug: "can we have autosaved it?" and "we only need a save
+# button as the naming is already automated". ONE rolling draft per
+# person, auto-named; the autosave writes it at most every ~20 s and only
+# when the selection changed (ofb_state.autosave_due), the top 💾 Save
+# writes it NOW. It shows in 📂 like any draft, so the PM can load the
+# current state at any moment, and a successful submit clears it.
+AUTOSAVE_NAME = "⏳ draft — %s" % user["name"]
+st.session_state["ofb_auto_pending"] = {
+    "units": units, "build": build_tag.strip(),
+    "lines": [{"part": c["m_code"], "qty": c["quantity"],
+               "recipient": c["recipient"], "eta": c["eta"],
+               "priority": c["priority"], "notes": c["notes"]}
+              for c in chosen]}
+if "ofb_auto_base" not in st.session_state:
+    # The first look at this working set (or at a just-loaded draft) is
+    # the baseline — opening the page is not worth a draft of its own.
+    st.session_state["ofb_auto_base"] = json.dumps(
+        st.session_state["ofb_auto_pending"], sort_keys=True, default=str)
+
+
+def _autosave_flush(force: bool = False) -> None:
+    """Write the rolling draft if it is due — from a full rerun, a beat,
+    or (force) the top 💾 Save button, which skips baseline and debounce."""
+    pending = st.session_state.get("ofb_auto_pending")
+    if not pending or not pending.get("lines"):
+        return                      # nothing selected: keep the last copy
+    if impersonation_block():
+        return                      # View-as sessions never write drafts
+    cur = json.dumps(pending, sort_keys=True, default=str)
+    if cur == st.session_state.get("ofb_auto_saved"):
+        return                      # already on the sheet, forced or not
+    if not force and not ofb_state.autosave_due(
+            cur, st.session_state.get("ofb_auto_base"),
+            st.session_state.get("ofb_auto_saved"),
+            st.session_state.get("ofb_auto_ts"), time.time()):
+        return
+    _why = order_drafts.save_draft(
+        project, AUTOSAVE_NAME,
+        user.get("email", "") or user.get("name", ""),
+        pending["units"], pending["build"], pending["lines"])
+    st.session_state["ofb_auto_ts"] = time.time()   # debounce failures too
+    if _why:
+        st.session_state["ofb_auto_note"] = _why
+        return
+    st.session_state["ofb_auto_saved"] = cur
+    st.session_state["ofb_auto_note"] = ""
+    st.session_state["ofb_auto_at"] = datetime.now().strftime("%H:%M")
+    # Keep the frozen drafts list telling the truth without a re-read.
+    _ws["drafts"][AUTOSAVE_NAME] = {
+        "saved_by": user.get("email", "") or user.get("name", ""),
+        "saved_at": datetime.now().strftime("%d %b %Y %H:%M"),
+        "units": str(pending["units"]), "build": pending["build"],
+        "lines": pending["lines"]}
+
+
+@st.fragment(run_every=25)
+def _autosave_beat() -> None:
+    """The flush runs with every full rerun AND every 25 s on its own —
+    the timer is what saves the LAST edit once the person stops
+    interacting (no rerun ever comes for it otherwise)."""
+    _autosave_flush()
+    _note = st.session_state.get("ofb_auto_note")
+    if _note:
+        st.caption("⚠ Autosave paused: %s Use **💾 Save draft** below." % _note)
+    elif st.session_state.get("ofb_auto_at"):
+        st.caption("⏳ Saved as **%s** at %s — loadable from 📂 above."
+                   % (AUTOSAVE_NAME, st.session_state["ofb_auto_at"]))
+    else:
+        st.caption("⏳ Once you edit, the selection autosaves as **%s** "
+                   "(every ~25 s); **💾 Save** above writes it right now. "
+                   "The PM loads it from 📂 anytime." % AUTOSAVE_NAME)
+
+
+if _save_clicked:
+    _autosave_flush(force=True)
+    if not st.session_state.get("ofb_auto_note"):
+        st.toast("Saved — %s" % AUTOSAVE_NAME)
+_autosave_beat()
+
+# ============================================================
 # 3. Submit
 # ============================================================
 st.subheader("3. Submit")
@@ -683,33 +786,10 @@ if no_tab:
 for p in problems:
     st.error(p)
 
-# Save the selection as a draft for someone ELSE to submit — the checks
-# above may still list problems; a draft is allowed to be unfinished, that
-# is what makes it a draft.
-d1, d2 = st.columns([2, 1.2], vertical_alignment="bottom")
-with d1:
-    draft_name = st.text_input(
-        "Save as draft (name)", key="ofb_draft_name",
-        value=st.session_state.get("ofb_loaded_draft", ""),
-        placeholder="e.g. T2 top-up — for PM review")
-with d2:
-    if st.button("💾 Save draft", key="ofb_draft_save",
-                 use_container_width=True):
-        _why = order_drafts.save_draft(
-            project, draft_name,
-            user.get("email", "") or user.get("name", ""),
-            units, build_tag.strip(),
-            [{"part": c["m_code"], "qty": c["quantity"],
-              "recipient": c["recipient"], "eta": c["eta"],
-              "priority": c["priority"], "notes": c["notes"]}
-             for c in chosen])
-        if _why:
-            st.error(_why)
-        else:
-            _ws["drafts"] = order_drafts.list_drafts(project)
-            st.success("Draft **%s** saved — %d part(s). Anyone can load it "
-                       "from 📂 at the top of this page."
-                       % (draft_name.strip(), len(chosen)))
+# The named save-as-draft form left with the autosave (Hamid, 28 Aug:
+# "we only need a save button as the naming is already automated") — the
+# hand-off is the auto-named per-person draft, written by the autosave and
+# the top 💾 Save; unfinished is fine, that is what makes it a draft.
 
 confirmed = st.checkbox(
     "I have reviewed all %d order(s) — they will be filed to %s's record"
@@ -758,6 +838,11 @@ if st.button("📤 Submit %d order(s)" % len(chosen), type="primary",
         # The frozen working set is stale by exactly these orders — drop it
         # so the next run re-reads and the submitted parts leave the grids.
         st.session_state.pop("ofb_working", None)
+        # The autosave WAS this batch — it just became the orders above.
+        order_drafts.delete_draft(project, AUTOSAVE_NAME)
+        for _k in ("ofb_auto_base", "ofb_auto_pending", "ofb_auto_saved",
+                   "ofb_auto_ts", "ofb_auto_at", "ofb_auto_note"):
+            st.session_state.pop(_k, None)
         st.session_state["ofb_nonce"] += 1
         # The Overview is derived from the part tabs — recompute so the new
         # raise lines show there immediately.
