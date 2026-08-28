@@ -205,6 +205,24 @@ def set_pinned_project(email: str, project: str) -> str:
         return "Could not save the pin: %s" % exc
 
 
+# name_of runs once per table ROW, and fetch_allowed_users deep-copies the
+# whole users dict on every cache hit — 136 rows cost half a second of pure
+# copying (measured, 24 Aug). The map below is rebuilt only when the cache
+# actually reloaded, so a hit is a plain dict lookup.
+_NAMES_MEMO = {"wall": None, "map": {}}
+
+
+def _email_names() -> dict:
+    stamp = data_cache.read_at(_cache_key())
+    wall = stamp[0] if stamp else None
+    if wall is None or _NAMES_MEMO["wall"] != wall:
+        _NAMES_MEMO["map"] = {e: (i.get("name") or e)
+                              for e, i in fetch_allowed_users().items()}
+        stamp = data_cache.read_at(_cache_key())
+        _NAMES_MEMO["wall"] = stamp[0] if stamp else None
+    return _NAMES_MEMO["map"]
+
+
 def name_of(value: str) -> str:
     """The person behind a logged-by cell, for DISPLAY only.
 
@@ -218,5 +236,4 @@ def name_of(value: str) -> str:
     low = raw.lower()
     if "@" not in low:
         return raw
-    entry = fetch_allowed_users().get(low)
-    return (entry.get("name") or raw) if entry else raw
+    return _email_names().get(low) or raw
