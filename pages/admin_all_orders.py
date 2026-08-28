@@ -488,34 +488,15 @@ with tab_cards:
 
 with tab_table:
     # One row per order, both record systems, same filters as the cards.
-    # Everything cast to str: app quantities are ints, ledger ones are
-    # sometimes words, and Arrow refuses the mixture.
-    _rows = []
-    for e in view:
-        o, t = e.get("order") or {}, e.get("thread") or {}
-        _rows.append({
-            "Project": (o.get("Project") or t.get("project", "")).strip()
-                       if o else t.get("project", ""),
-            "M-Code": o.get("PartID", "") or t.get("mcode", ""),
-            "Part": o.get("PartName", "") or t.get("part_name", ""),
-            "Version": o.get("Version", "") or t.get("version", ""),
-            "Order ID": (o.get("OrderID", "") if o else "")
-                        or str(t.get("order_id", "")),
-            "Date": e["when"] or t.get("date", ""),
-            "Ordered": str(t.get("qty_ordered", "") if t
-                           else o.get("Quantity", "")),
-            "Received": str(t.get("qty_received", "")) if t else "",
-            "Status": e["status"],
-            "Priority": e["priority"] if e["kind"] == "app" else "",
-            "Raised by": e["who"],
-            "Recipient": (o.get("Recipient", "") if o
-                          else t.get("recipient", "")),
-        })
-    _df = pd.DataFrame(_rows).astype(str)
-    _df.index = range(1, len(_df) + 1)
+    # A hand-built HTML table rather than st.dataframe: the M-Code cell is a
+    # real single-click hyperlink to Part Detail (1.38's LinkColumn renders
+    # relative links as raw text), and row colours come from the same
+    # Overview palette constants. Part Detail consumes ?project=&part= and
+    # clears them — a link opens a new tab, and a fresh tab shares no
+    # session state.
+    from html import escape
+    from urllib.parse import quote
 
-    # The Overview page's palette, one row per status — read from the same
-    # constants so the two tables can never drift apart.
     _paint_by = {
         "new": overview_board.COLOURS[overview_board.ORDERED],
         "processing": overview_board.COLOURS[overview_board.ORDERED],
@@ -524,13 +505,49 @@ with tab_table:
         "delivered": overview_board.COLOURS[overview_board.DELIVERED],
         "cancelled": overview_board.COLOURS[overview_board.CANCELLED],
     }
-
-    def _paint(row):
-        return ["background-color: %s"
-                % _paint_by.get(str(row.get("Status", "")).lower(), "")] * len(row)
-
-    st.dataframe(_df.style.apply(_paint, axis=1), use_container_width=True,
-                 hide_index=False, height=ui.table_height(len(_df)))
+    _heads = ["#", "Project", "M-Code", "Part", "Version", "Order ID", "Date",
+              "Ordered", "Received", "Status", "Priority", "Raised by",
+              "Recipient"]
+    _body = []
+    for i, e in enumerate(view, start=1):
+        o, t = e.get("order") or {}, e.get("thread") or {}
+        _code = e["code"]
+        if _code:
+            _cell = ('<a href="tracker_part_detail?project=%s&part=%s" '
+                     'target="_blank" title="Open %s on Part Detail">%s</a>'
+                     % (quote(e["project"]), quote(_code), escape(_code),
+                        escape(_code)))
+        else:
+            _cell = ""
+        _vals = [
+            str(i), escape(e["project"]), _cell,
+            escape(o.get("PartName", "") or t.get("part_name", "")),
+            escape(o.get("Version", "") or t.get("version", "")),
+            escape((o.get("OrderID", "") if o else "")
+                   or str(t.get("order_id", ""))),
+            escape(e["when"] or t.get("date", "")),
+            escape(str(t.get("qty_ordered", "") if t
+                       else o.get("Quantity", ""))),
+            escape(str(t.get("qty_received", "")) if t else ""),
+            escape(e["status"]),
+            escape(e["priority"] if e["kind"] == "app" else ""),
+            escape(e["who"]),
+            escape((o.get("Recipient", "") if o else t.get("recipient", ""))),
+        ]
+        _body.append('<tr style="background:%s">%s</tr>'
+                     % (_paint_by.get(e["status"], "#ffffff"),
+                        "".join("<td>%s</td>" % v for v in _vals)))
+    st.markdown(
+        '<div style="max-height:620px;overflow:auto;border:1px solid #e6e6e6;'
+        'border-radius:6px"><table style="width:100%%;border-collapse:collapse;'
+        'font-size:13px"><thead><tr style="position:sticky;top:0;'
+        'background:#fafafa;z-index:1">%s</tr></thead><tbody>%s</tbody>'
+        '</table></div>'
+        '<style>.stMarkdown table td, .stMarkdown table th '
+        '{padding:4px 10px; border-bottom:1px solid #eee; text-align:left; '
+        'white-space:nowrap;}</style>'
+        % ("".join("<th>%s</th>" % h for h in _heads), "".join(_body)),
+        unsafe_allow_html=True)
     st.caption(
         "🟩 light green — open: new, processing or ordered · "
         "shipped keeps the same open green · 🟢 green — "
