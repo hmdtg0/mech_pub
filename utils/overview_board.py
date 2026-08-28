@@ -206,7 +206,13 @@ def _overviews(projects) -> Dict[tuple, dict]:
     sheets = project_registry.all_projects()
     out: Dict[tuple, dict] = {}
     for project in projects:
-        for row in parts_tracker.fetch_overview(sheets.get(project, "")):
+        sid = sheets.get(project, "")
+        if not sid:
+            # A project named only by data rows, with no registered record —
+            # fetch_overview("") would silently fall back to the ACTIVE
+            # sheet and tag its parts with the wrong project.
+            continue
+        for row in parts_tracker.fetch_overview(sid):
             code = row.get("mcode", "").strip()
             if not code:
                 continue
@@ -227,8 +233,14 @@ def rows(orders: Optional[List[dict]] = None, legs: Optional[List[dict]] = None,
     legs = movements_store.shipments_across_projects() if legs is None else legs
     today = today or _today()
 
-    projects = sorted({r.get("project", "") for r in list(orders) + list(legs)
-                       if r.get("project")})
+    # The REGISTRY is the project list, not the data: a project registered
+    # yesterday with no orders and no movements yet must still show its parts
+    # as "Not ordered" — deriving the list from data tags made a brand-new
+    # project invisible here until its first order. Data tags are unioned in
+    # so rows naming an unregistered project still render.
+    projects = sorted(set(project_registry.all_projects())
+                      | {r.get("project", "") for r in list(orders) + list(legs)
+                         if r.get("project")})
     known = _overviews(projects)
     out: List[dict] = []
     seen_parts = set()

@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Dict, List, Optional, Sequence
 
-from config import TAB_MOVEMENTS
+from config import TAB_MOVEMENTS_MERGED
 from utils import bom_sheet, parts_model, parts_tracker, project_registry
 
 # --- the part tab, as generated ---------------------------------------------
@@ -47,10 +47,16 @@ LEDGER = [
 ]
 HEADER_ROW = 3          # ledger header sits on row 3; data starts at row 4
 
-# The Movement Log the record template omits, without which every movement
-# write fails.
-MOVEMENT_HEADER = ["Date", "Item / Build", "Qty", "From", "To", "Stage",
-                   "M-Code", "Notes"]
+# The MERGED movement log ("Movements"), created with every record so a new
+# project starts life in the one-log world: stock_store.has_log() finds the
+# tab and writes here, never falling back to the retired central
+# Stock_History. The header is exactly the field set record_movement writes.
+# (Until 24 Aug this built the RETIRED "Movement Log" tab instead, so every
+# app-built record sent its movements to the central log and its Movements
+# page read an empty tab — the two-log world, recreated for new projects.)
+MOVEMENT_HEADER = ["Date", "Event", "Part ID", "Description", "Type", "Qty",
+                   "From", "To", "Courier / Tracking", "Build", "Logged By",
+                   "Logged At", "Notes", "Flag"]
 
 # Google rejects these in a sheet name; a single bad title fails the whole
 # batch, so they are filtered out before anything is sent.
@@ -115,7 +121,7 @@ def plan(project: str, sheet_id: Optional[str] = None,
         out["problem"] = "Cannot read the record's tabs: %s" % exc
         return out
     existing = set(titles)
-    out["movement_log"] = TAB_MOVEMENTS not in existing
+    out["movement_log"] = TAB_MOVEMENTS_MERGED not in existing
 
     seen: Dict[str, str] = {}
     for row in rows:
@@ -191,7 +197,7 @@ def build(project: str, created_by: str, sheet_id: Optional[str] = None,
         for p in todo]
     if need_log:
         requests.append({"addSheet": {"properties": {
-            "title": TAB_MOVEMENTS,
+            "title": TAB_MOVEMENTS_MERGED,
             "gridProperties": {"rowCount": 500, "columnCount": cols}}}})
 
     # 1 call: every tab. addSheet is all-or-nothing, which is why titles were
@@ -206,7 +212,7 @@ def build(project: str, created_by: str, sheet_id: Optional[str] = None,
     data = [{"range": "%s!A1" % _quote(p["title"]),
              "values": _meta_rows(p, created_by)} for p in todo]
     if need_log:
-        data.append({"range": "%s!A1" % _quote(TAB_MOVEMENTS),
+        data.append({"range": "%s!A1" % _quote(TAB_MOVEMENTS_MERGED),
                      "values": [MOVEMENT_HEADER]})
     try:
         ss.values_batch_update({"valueInputOption": "USER_ENTERED",
@@ -417,5 +423,5 @@ def summary(result: dict) -> str:
         if items and not (key == "to_create" and result.get("created")):
             bits.append("%d %s" % (len(items), label))
     if result.get("movement_log"):
-        bits.append("Movement Log missing")
+        bits.append("Movements log missing")
     return " · ".join(bits)
