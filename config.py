@@ -132,12 +132,14 @@ MOVEMENT_EVENTS = {
 
 # What the ENTRY pickers offer, most-reached-for first — trimmed 28 Aug
 # (Hamid's interview): Movement and Delivery folded into "Hand delivered";
-# Correction, Cancelled and Order left entry entirely (Order lines are
-# written by Order from BOM, Receipt lines by Receive goods; corrections
-# get their own admin path per the proposal). Every legacy name above still
-# READS correctly — this list only governs what can be typed in new.
+# Correction and Order left entry entirely (Order lines are written by
+# Order from BOM, Receipt lines by Receive goods; corrections get their
+# own admin path per the proposal). Cancelled STAYS — it is the one way to
+# call an order off ("add cancel to history entry, my bad"). Every legacy
+# name above still READS correctly — this list only governs what can be
+# typed in new.
 EVENT_CHOICES = ["Hand delivered", "Receipt", "Shipping", "QC", "Update",
-                 "Return", "Scrap", "Hold"]
+                 "Return", "Scrap", "Hold", "Cancelled"]
 
 
 def event_rule(event: str) -> dict:

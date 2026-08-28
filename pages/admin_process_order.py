@@ -581,17 +581,17 @@ st.markdown("---")
 # --- Add history entry: the ONE entry point (Hamid, 28 Aug) -----------------
 # "the goal is to have one entry point called 'Add history entry'". The
 # picker decides which fields show; each branch is the exact form that used
-# to stand on its own (history entry, order info, costs) — same keys, same
-# writes, same wiring — so nothing about HOW an entry is recorded changed,
-# only WHERE its form lives. The old stock-movement form is gone as
-# redundant (Hamid, same day): a History entry with a moves-stock event and
-# a quantity reaches the movement log and the count through the same
-# writer, so the separate form recorded nothing the history form cannot.
+# to stand on its own — same keys, same writes, same wiring. The old
+# stock-movement form went first as redundant (a History entry with a
+# moves-stock event and a quantity reaches the movement log and the count
+# through the same writer); Order info followed ("I dont see any use for
+# order info for now") — its five fields stay fully editable on the All
+# Orders order cards, which carry the identical form.
 st.subheader("📜 Add history entry")
 
 _entry_kind = st.radio(
     "What are you recording?",
-    ["📜 History entry", "🧾 Order info", "💰 Costs"],
+    ["📜 History entry", "💰 Costs"],
     horizontal=True, key="proc_entry_kind", label_visibility="collapsed")
 
 if _entry_kind.endswith("History entry"):
@@ -739,49 +739,6 @@ if _entry_kind.endswith("History entry"):
                         message + stock_note)
                 else:
                     st.error(message)
-
-elif _entry_kind.endswith("Order info"):
-    # Was its own "Processing" section — the FIELDS stay, per Hamid's "keep
-    # all fields"; only the form's home changed.
-    with st.form("process_form"):
-        pcol1, pcol2 = st.columns(2)
-        with pcol1:
-            vendor = st.text_input("Vendor", value=order.get("Vendor", ""),
-                                   placeholder="e.g. JLC CNC / Xometry / local shop")
-            vendor_order = st.text_input("Vendor Order #", value=order.get("VendorOrderNum", ""))
-            tracking = st.text_input("Tracking #", value=order.get("TrackingNum", ""))
-        with pcol2:
-            current_eta = order.get("ETA", "")
-            # The Orders tab first, then the part history's ETA as the
-            # prefill — saving the form is what writes it into the Orders tab.
-            eta_default = _parse_eta(current_eta) or _parse_eta(history_eta)
-            # The key is per order — one shared key made order A's ETA follow
-            # you onto order B.
-            eta_date = st.date_input("ETA (UK)", value=eta_default,
-                                     key="proc_eta_%s" % order_id)
-            eta = eta_date.strftime("%d %b %Y") if eta_date else ""
-            notes = st.text_area("Notes", value=order.get("Notes", ""),
-                                 height=200, key="proc_notes_%s" % order_id)
-
-        if st.form_submit_button("Save Order Info", type="primary"):
-            if client:
-                updates = {}
-                if vendor != order.get("Vendor", ""):
-                    updates["Vendor"] = vendor
-                if vendor_order != order.get("VendorOrderNum", ""):
-                    updates["VendorOrderNum"] = vendor_order
-                if tracking != order.get("TrackingNum", ""):
-                    updates["TrackingNum"] = tracking
-                if eta != order.get("ETA", ""):
-                    updates["ETA"] = eta
-                if notes != order.get("Notes", ""):
-                    updates["Notes"] = notes
-                if updates:
-                    update_order(client, order_id, updates)
-                    flash("success", "Order info saved.")
-                    st.rerun()
-                else:
-                    st.info("No changes to save.")
 
 else:   # 💰 Costs
     def _to_float(v):
