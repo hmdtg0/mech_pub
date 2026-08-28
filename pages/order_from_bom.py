@@ -104,7 +104,8 @@ _refresh_clicked = _head2.button(
 _save_clicked = _head3.button(
     "💾 Save", key="ofb_save_now", use_container_width=True,
     help="Write your current selection to your draft right now — it also "
-         "autosaves every ~25 s once you edit. The PM loads it from 📂.")
+         "autosaves every ~25 s once you edit. Colleagues see it at the "
+         "top of this page and on All Orders.")
 
 
 def _int(value) -> int:
@@ -250,30 +251,34 @@ if st.session_state.get("ofb_loaded_draft"):
     else:
         st.info("Working from draft **%s** — submitting will clear it."
                 % st.session_state["ofb_loaded_draft"])
-if _drafts:
-    with st.expander("📂 Load a saved draft (%d)" % len(_drafts)):
-        st.caption("Listed as of when this page loaded — ↻ Refresh above "
-                   "picks up drafts saved since.")
-        _names = sorted(_drafts)
-        _pick = st.selectbox(
-            "Draft", _names, key="ofb_draft_pick",
-            format_func=lambda n: "%s — %s, %s (%d part%s)" % (
-                n, _drafts[n]["saved_by"], _drafts[n]["saved_at"],
-                len(_drafts[n]["lines"]),
-                "" if len(_drafts[n]["lines"]) == 1 else "s"))
-        c_load, c_del = st.columns([1, 1])
-        if c_load.button("Open this draft", type="primary",
-                         key="ofb_draft_load"):
-            _queue_draft(_pick, _drafts[_pick])
-            st.rerun()
-        if c_del.button("Delete this draft", key="ofb_draft_del"):
-            _why = order_drafts.delete_draft(project, _pick)
-            if _why:
-                st.error(_why)
-            else:
+# Colleagues' drafts only, one line each — YOURS is never listed, it
+# auto-resumes (Hamid, 28 Aug: "as we automatically relaoding from order
+# draft tab, we dont need this" — the 📂 expander died with it). What
+# stays is the two-person hand-off: the PM opens the engineer's draft
+# right here. Most days nothing renders at all.
+for _n in sorted(n for n in _drafts if n != _SLOT):
+    _d = _drafts[_n]
+    _oc1, _oc2, _oc3 = st.columns([4, 0.95, 0.6],
+                                  vertical_alignment="center")
+    _oc1.markdown("📥 **%s** — %s, %s (%d part%s)"
+                  % (_n, _d["saved_by"], _d["saved_at"], len(_d["lines"]),
+                     "" if len(_d["lines"]) == 1 else "s"))
+    if _oc2.button("▶ Open", key="ofb_open_%s" % _n,
+                   use_container_width=True,
+                   help="Load this draft into the tables to review "
+                        "and submit."):
+        _queue_draft(_n, _d)
+        st.rerun()
+    if _oc3.button("🗑", key="ofb_del_%s" % _n, use_container_width=True,
+                   help="Delete this draft from the Order Drafts tab."):
+        _why = order_drafts.delete_draft(project, _n)
+        if _why:
+            st.error(_why)
+        else:
+            if st.session_state.get("ofb_loaded_draft") == _n:
                 st.session_state.pop("ofb_loaded_draft", None)
-                _ws["drafts"] = order_drafts.list_drafts(project)
-                st.rerun()
+            _ws["drafts"] = order_drafts.list_drafts(project)
+            st.rerun()
 
 # ============================================================
 # 1. How many
@@ -732,8 +737,9 @@ st.markdown("**%d of %d parts selected.**" % (len(chosen), len(rows)))
 # button as the naming is already automated". ONE rolling draft per
 # person, auto-named; the autosave writes it at most every ~20 s and only
 # when the selection changed (ofb_state.autosave_due), the top 💾 Save
-# writes it NOW. It shows in 📂 like any draft, so the PM can load the
-# current state at any moment, and a successful submit clears it.
+# writes it NOW. It resumes for YOU by itself, lists for colleagues at
+# the top of this page and on All Orders, and a successful submit
+# clears it.
 AUTOSAVE_NAME = _SLOT   # one name for the slot, defined by the drafts block
 st.session_state["ofb_auto_pending"] = {
     "units": units, "build": build_tag.strip(),
@@ -793,12 +799,13 @@ def _autosave_beat() -> None:
     if _note:
         st.caption("⚠ Autosave paused: %s Use **💾 Save draft** below." % _note)
     elif st.session_state.get("ofb_auto_at"):
-        st.caption("⏳ Saved as **%s** at %s — loadable from 📂 above."
+        st.caption("⏳ Saved as **%s** at %s — it resumes for you by "
+                   "itself, and colleagues see it here and on All Orders."
                    % (AUTOSAVE_NAME, st.session_state["ofb_auto_at"]))
     else:
         st.caption("⏳ Once you edit, the selection autosaves as **%s** "
-                   "(every ~25 s); **💾 Save** above writes it right now. "
-                   "The PM loads it from 📂 anytime." % AUTOSAVE_NAME)
+                   "(every ~25 s); **💾 Save** above writes it right now."
+                   % AUTOSAVE_NAME)
 
 
 if _save_clicked:
