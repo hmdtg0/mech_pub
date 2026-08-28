@@ -1,11 +1,15 @@
-"""All Orders - Admin dashboard showing all mech orders."""
-import json
-from datetime import datetime, date
+"""The orders workqueue — every order, one card each, with actions.
 
-import pandas as pd
+This WAS the All Orders page; since 28 Aug it renders as the "Orders" view
+of the merged Overview page (Hamid: "less pages to track"). Everything the
+page did lives here unchanged — render(user) draws it; the shell page owns
+auth, the title and the Board/Orders switch.
+"""
+import json
+from datetime import datetime
+
 import streamlit as st
 
-from utils.auth import require_role
 from utils.google_client import get_gspread_client
 from utils import (overview_board, project_colors, project_registry,
                    tracker_order_ui, tracker_orders, ui)
@@ -23,12 +27,19 @@ STATUS_ACTIONS = {
     "shipped": ("✅ Mark as Delivered", "delivered"),
 }
 
+_CLOSED = ("delivered", "cancelled")
+
 
 def _to_f(v):
     try:
         return float(str(v).strip()) if str(v).strip() else 0.0
     except (ValueError, TypeError):
         return 0.0
+
+
+def _progress_text(thread):
+    return "%s/%s received" % (thread.get("qty_received", 0),
+                               thread.get("qty_ordered", 0) or "?")
 
 
 def ledger_block(thread: dict, key: str) -> None:
@@ -256,7 +267,6 @@ def order_card(order_id: str, user_name: str, progress: str = "",
                         st.rerun()
 
 
-
 def history_card(order: dict, progress: str = "",
                  thread: dict = None) -> None:
     """One delivered/cancelled order, read-only. No fragment: nothing in it
@@ -323,209 +333,201 @@ def history_card(order: dict, progress: str = "",
         if thread:
             ledger_block(thread, "done_%s" % order.get("OrderID", "?"))
 
-user = require_role("admin", "engineer", "logistics")
 
-st.title("📊 All Orders")
+def render(user) -> None:
+    """The whole orders desk: metrics ladder, filters, cards and table."""
+    # ONE list, one card per order (Hamid, 24 Aug: "why do we even have 2?").
+    # Every app-raised order since 19 Aug carries its central id on the ledger
+    # raise line, so the two record systems join: workflow (status, vendor,
+    # tracking, costs, messages) from the Orders tab, custody and quantities
+    # from the part's own tab — one card, both halves. Orders that exist in
+    # only one system still get their card: pre-app history has no Orders row,
+    # and the 18-Aug batch predates id-stamping so it has no ledger thread.
 
-# ONE list, one card per order (Hamid, 24 Aug: "why do we even have 2?").
-# Every app-raised order since 19 Aug carries its central id on the ledger
-# raise line, so the two record systems join: workflow (status, vendor,
-# tracking, costs, messages) from the Orders tab, custody and quantities from
-# the part's own tab — one card, both halves. Orders that exist in only one
-# system still get their card: pre-app history has no Orders row, and the
-# 18-Aug batch predates id-stamping so it has no ledger thread.
+    _tracker_all = ui.in_scope(tracker_orders.all_projects_orders())
+    all_orders = ui.in_scope(fetch_all_orders())
 
-_tracker_all = ui.in_scope(tracker_orders.all_projects_orders())
-all_orders = ui.in_scope(fetch_all_orders())
+    _thread_of = {}
+    for _t in _tracker_all:
+        _oid = str(_t.get("order_id", "")).strip()
+        if _oid:
+            _thread_of[_oid] = _t
+    _app_ids = {str(o.get("OrderID", "")).strip() for o in all_orders}
+    _ledger_only = [t for t in _tracker_all
+                    if str(t.get("order_id", "")).strip() not in _app_ids]
 
-_thread_of = {}
-for _t in _tracker_all:
-    _oid = str(_t.get("order_id", "")).strip()
-    if _oid:
-        _thread_of[_oid] = _t
-_app_ids = {str(o.get("OrderID", "")).strip() for o in all_orders}
-_ledger_only = [t for t in _tracker_all
-                if str(t.get("order_id", "")).strip() not in _app_ids]
+    # --- one entry per order, whichever system recorded it ------------------
+    entries = []
+    for o in all_orders:
+        _oid = str(o.get("OrderID", "")).strip()
+        _t = _thread_of.get(_oid)
+        # The status shown is the RECONCILED one — the ledger can move an
+        # order forward past the Orders tab's stored value, never backward
+        # (the same effective_status rule Process Order applies). Without
+        # this, an order received on the sheet still read NEW here: the
+        # Orders tab lags until someone advances it by hand, and M108 sat
+        # delivered-but-invisible (Hamid, 24 Aug).
+        _stored = (o.get("Status") or "new").strip() or "new"
+        _eff = tracker_orders.effective_status(
+            _stored, _t.get("derived", "") if _t else "")
+        entries.append({
+            "kind": "app",
+            "order": dict(o, Status=_eff) if _eff != _stored else o,
+            "thread": _t,
+            "status": _eff,
+            "priority": o.get("Priority", "Normal"),
+            "who": o.get("EngineerName", ""),
+            "text": " ".join([o.get("PartName", ""), o.get("PartID", ""), _oid]),
+            "when": o.get("CreatedAt", ""),
+            "project": (o.get("Project") or "").strip(),
+            "code": (o.get("PartID") or (_t.get("mcode", "") if _t else "")).strip(),
+        })
+    for _t in _ledger_only:
+        entries.append({
+            "kind": "ledger", "order": None, "thread": _t,
+            # The sheet's own story, in the app's status vocabulary.
+            "status": _t.get("derived") or "ordered",
+            "priority": "Normal",
+            "who": _t.get("ordered_by", ""),
+            "text": " ".join([_t.get("mcode", ""), _t.get("part_name", ""),
+                              str(_t.get("order_id", ""))]),
+            "when": "",
+            "project": _t.get("project", ""),
+            "code": _t.get("mcode", ""),
+        })
 
-_closed = ("delivered", "cancelled")
+    if not entries:
+        st.info("No orders anywhere yet — raise the first on **Order from BOM**.")
+        st.stop()
 
+    # --- Summary metrics: the whole ladder, both record systems -------------
+    _statuses = list(ORDER_STATUSES) + ["cancelled"]
+    for col, status in zip(st.columns(len(_statuses)), _statuses):
+        col.metric(status.upper(),
+                   sum(1 for e in entries if e["status"] == status))
 
-def _progress_text(thread):
-    return "%s/%s received" % (thread.get("qty_received", 0),
-                               thread.get("qty_ordered", 0) or "?")
+    _total_cost_cny = sum(_to_f(o.get("PartsCostCNY")) + _to_f(o.get("ShippingCostCNY"))
+                          for o in all_orders)
+    if _total_cost_cny > 0:
+        st.caption("💰 Recorded costs across all orders: "
+                   "**£%s GBP** (¥%s CNY · rate 1 CNY = %s GBP)"
+                   % (format(_total_cost_cny * CNY_TO_GBP, ",.0f"),
+                      format(_total_cost_cny, ",.0f"), CNY_TO_GBP))
 
+    st.markdown("---")
 
-# --- one entry per order, whichever system recorded it ----------------------
-entries = []
-for o in all_orders:
-    _oid = str(o.get("OrderID", "")).strip()
-    _t = _thread_of.get(_oid)
-    # The status shown is the RECONCILED one — the ledger can move an order
-    # forward past the Orders tab's stored value, never backward (the same
-    # effective_status rule Process Order applies). Without this, an order
-    # received on the sheet still read NEW here: the Orders tab lags until
-    # someone advances it by hand, and M108 sat delivered-but-invisible
-    # (Hamid, 24 Aug: "i see one delivered but not showing up").
-    _stored = (o.get("Status") or "new").strip() or "new"
-    _eff = tracker_orders.effective_status(
-        _stored, _t.get("derived", "") if _t else "")
-    entries.append({
-        "kind": "app",
-        "order": dict(o, Status=_eff) if _eff != _stored else o,
-        "thread": _t,
-        "status": _eff,
-        "priority": o.get("Priority", "Normal"),
-        "who": o.get("EngineerName", ""),
-        "text": " ".join([o.get("PartName", ""), o.get("PartID", ""), _oid]),
-        "when": o.get("CreatedAt", ""),
-        "project": (o.get("Project") or "").strip(),
-        "code": (o.get("PartID") or (_t.get("mcode", "") if _t else "")).strip(),
-    })
-for _t in _ledger_only:
-    entries.append({
-        "kind": "ledger", "order": None, "thread": _t,
-        # The sheet's own story, in the app's status vocabulary.
-        "status": _t.get("derived") or "ordered",
-        "priority": "Normal",
-        "who": _t.get("ordered_by", ""),
-        "text": " ".join([_t.get("mcode", ""), _t.get("part_name", ""),
-                          str(_t.get("order_id", ""))]),
-        "when": "",
-        "project": _t.get("project", ""),
-        "code": _t.get("mcode", ""),
-    })
+    # --- Filters ---
+    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+    with col_f1:
+        search = st.text_input("Search part / order id",
+                               placeholder="Type to filter...", key="ao_search")
+    with col_f2:
+        status_filter = st.selectbox("Status", ["all"] + _statuses, index=0,
+                                     key="ao_status")
+    with col_f3:
+        priority_filter = st.selectbox("Priority", ["all", "URGENT", "Normal"],
+                                       key="ao_priority")
+    with col_f4:
+        _names = sorted({e["who"] for e in entries if e["who"]})
+        who_filter = st.selectbox("Raised by", ["all"] + _names, key="ao_engineer")
 
-if not entries:
-    st.info("No orders anywhere yet — raise the first on **Order from BOM**.")
-    st.stop()
+    view = entries
+    if status_filter != "all":
+        view = [e for e in view if e["status"] == status_filter]
+    if priority_filter != "all":
+        view = [e for e in view if e["priority"] == priority_filter]
+    if who_filter != "all":
+        view = [e for e in view if e["who"] == who_filter]
+    if search:
+        _s = search.lower()
+        view = [e for e in view if _s in e["text"].lower()]
 
-# --- Summary metrics: the whole ladder, both record systems -----------------
-_statuses = list(ORDER_STATUSES) + ["cancelled"]
-for col, status in zip(st.columns(len(_statuses)), _statuses):
-    col.metric(status.upper(),
-               sum(1 for e in entries if e["status"] == status))
+    # Global project indexing (Hamid, 24 Aug): every listing walks the BOM the
+    # same way — by part code within the project, exactly as the Board does —
+    # so row 7 here is the same part as row 7 there. Cards and table share
+    # this one order; status shows in the chip and the row colour, not in the
+    # position. Same-part orders keep newest first; codeless app orders close
+    # each project's block.
+    view.sort(key=lambda e: e["when"], reverse=True)
+    view.sort(key=lambda e: (e["project"],
+                             overview_board.sort_code(e["code"] or "￿")))
 
-_total_cost_cny = sum(_to_f(o.get("PartsCostCNY")) + _to_f(o.get("ShippingCostCNY"))
-                      for o in all_orders)
-if _total_cost_cny > 0:
-    st.caption("💰 Recorded costs across all orders: "
-               "**£%s GBP** (¥%s CNY · rate 1 CNY = %s GBP)"
-               % (format(_total_cost_cny * CNY_TO_GBP, ",.0f"),
-                  format(_total_cost_cny, ",.0f"), CNY_TO_GBP))
+    _bits = ["**%d orders** shown" % len(view)]
+    _app_only = sum(1 for e in entries if e["kind"] == "app" and not e["thread"])
+    if _app_only:
+        _bits.append("%d app-only" % _app_only)
+    if _ledger_only:
+        _bits.append("%d ledger-only (pre-app history)" % len(_ledger_only))
+    st.markdown(" · ".join(_bits))
+    st.markdown("---")
 
-st.markdown("---")
+    # --- Two views of the same filtered list: cards, one row per order ------
+    tab_cards, tab_table = st.tabs(["🗂 Cards (%d)" % len(view),
+                                    "📋 Table View (%d)" % len(view)])
 
-# --- Filters ---
-col_f1, col_f2, col_f3, col_f4 = st.columns(4)
-with col_f1:
-    search = st.text_input("Search part / order id",
-                           placeholder="Type to filter...", key="ao_search")
-with col_f2:
-    status_filter = st.selectbox("Status", ["all"] + _statuses, index=0,
-                                 key="ao_status")
-with col_f3:
-    priority_filter = st.selectbox("Priority", ["all", "URGENT", "Normal"],
-                                   key="ao_priority")
-with col_f4:
-    _names = sorted({e["who"] for e in entries if e["who"]})
-    who_filter = st.selectbox("Raised by", ["all"] + _names, key="ao_engineer")
+    with tab_cards:
+        MAX_SHOW = 20
+        shown = view
+        if len(view) > MAX_SHOW:
+            if not st.checkbox("Show all %d (showing first %d)"
+                               % (len(view), MAX_SHOW), key="ao_show_all"):
+                shown = view[:MAX_SHOW]
 
-view = entries
-if status_filter != "all":
-    view = [e for e in view if e["status"] == status_filter]
-if priority_filter != "all":
-    view = [e for e in view if e["priority"] == priority_filter]
-if who_filter != "all":
-    view = [e for e in view if e["who"] == who_filter]
-if search:
-    _s = search.lower()
-    view = [e for e in view if _s in e["text"].lower()]
+        for e in shown:
+            if e["kind"] == "ledger":
+                tracker_order_ui.render_order(
+                    e["thread"], "ao_%s_%s" % (e["thread"]["mcode"],
+                                               e["thread"].get("order_id", "")))
+            elif e["status"] in _CLOSED:
+                history_card(e["order"],
+                             _progress_text(e["thread"]) if e["thread"] else "",
+                             e["thread"])
+            else:
+                order_card(e["order"].get("OrderID", "?"), user["name"],
+                           _progress_text(e["thread"]) if e["thread"] else "",
+                           e["thread"])
 
-# Global project indexing (Hamid, 24 Aug): every listing walks the BOM the
-# same way — by part code within the project, exactly as the Overview page
-# does — so row 7 here is the same part as row 7 there. Cards and table
-# share this one order; status shows in the chip and the row colour, not in
-# the position. Same-part orders keep newest first; codeless app orders
-# close each project's block.
-view.sort(key=lambda e: e["when"], reverse=True)
-view.sort(key=lambda e: (e["project"],
-                         overview_board.sort_code(e["code"] or "￿")))
+    with tab_table:
+        # One row per order, both record systems, same filters as the cards.
+        # Rendered by the shared ui.native_table — the one grid everywhere
+        # (Hamid, 28 Aug); its M-Code links open Part Detail in a new tab.
+        _paint_by = {
+            "new": overview_board.COLOURS[overview_board.ORDERED],
+            "processing": overview_board.COLOURS[overview_board.ORDERED],
+            "ordered": overview_board.COLOURS[overview_board.ORDERED],
+            "shipped": overview_board.COLOURS[overview_board.SHIPPED],
+            "delivered": overview_board.COLOURS[overview_board.DELIVERED],
+            "cancelled": overview_board.COLOURS[overview_board.CANCELLED],
+        }
+        _heads = ["Project", "M-Code", "Part", "Version", "Order ID", "Date",
+                  "Ordered", "Received", "Status", "Priority", "Raised by",
+                  "Recipient"]
+        _cells, _bg = [], []
+        for e in view:
+            o, t = e.get("order") or {}, e.get("thread") or {}
+            _cells.append([
+                e["project"],
+                ui.part_url(e["project"], e["code"]),
+                o.get("PartName", "") or t.get("part_name", ""),
+                o.get("Version", "") or t.get("version", ""),
+                (o.get("OrderID", "") if o else "")
+                or str(t.get("order_id", "")),
+                e["when"] or t.get("date", ""),
+                str(t.get("qty_ordered", "") if t
+                    else o.get("Quantity", "")),
+                str(t.get("qty_received", "")) if t else "",
+                e["status"],
+                e["priority"] if e["kind"] == "app" else "",
+                e["who"],
+                (o.get("Recipient", "") if o else t.get("recipient", "")),
+            ])
+            _bg.append(_paint_by.get(e["status"], "#ffffff"))
+        ui.native_table(_heads, _cells, _bg, link_col="M-Code", index=True)
 
-_bits = ["**%d orders** shown" % len(view)]
-_app_only = sum(1 for e in entries if e["kind"] == "app" and not e["thread"])
-if _app_only:
-    _bits.append("%d app-only" % _app_only)
-if _ledger_only:
-    _bits.append("%d ledger-only (pre-app history)" % len(_ledger_only))
-st.markdown(" · ".join(_bits))
-st.markdown("---")
-
-# --- Two views of the same filtered list: cards, and one row per order ------
-tab_cards, tab_table = st.tabs(["🗂 Cards (%d)" % len(view),
-                                "📋 Table View (%d)" % len(view)])
-
-with tab_cards:
-    MAX_SHOW = 20
-    shown = view
-    if len(view) > MAX_SHOW:
-        if not st.checkbox("Show all %d (showing first %d)"
-                           % (len(view), MAX_SHOW), key="ao_show_all"):
-            shown = view[:MAX_SHOW]
-
-    for e in shown:
-        if e["kind"] == "ledger":
-            tracker_order_ui.render_order(
-                e["thread"], "ao_%s_%s" % (e["thread"]["mcode"],
-                                           e["thread"].get("order_id", "")))
-        elif e["status"] in _closed:
-            history_card(e["order"],
-                         _progress_text(e["thread"]) if e["thread"] else "",
-                         e["thread"])
-        else:
-            order_card(e["order"].get("OrderID", "?"), user["name"],
-                       _progress_text(e["thread"]) if e["thread"] else "",
-                       e["thread"])
-
-with tab_table:
-    # One row per order, both record systems, same filters as the cards.
-    # Rendered by the shared ui.native_table — the one grid everywhere
-    # (Hamid, 28 Aug); its M-Code links open Part Detail in a new tab.
-    _paint_by = {
-        "new": overview_board.COLOURS[overview_board.ORDERED],
-        "processing": overview_board.COLOURS[overview_board.ORDERED],
-        "ordered": overview_board.COLOURS[overview_board.ORDERED],
-        "shipped": overview_board.COLOURS[overview_board.SHIPPED],
-        "delivered": overview_board.COLOURS[overview_board.DELIVERED],
-        "cancelled": overview_board.COLOURS[overview_board.CANCELLED],
-    }
-    _heads = ["Project", "M-Code", "Part", "Version", "Order ID", "Date",
-              "Ordered", "Received", "Status", "Priority", "Raised by",
-              "Recipient"]
-    _cells, _bg = [], []
-    for e in view:
-        o, t = e.get("order") or {}, e.get("thread") or {}
-        _cells.append([
-            e["project"],
-            ui.part_url(e["project"], e["code"]),
-            o.get("PartName", "") or t.get("part_name", ""),
-            o.get("Version", "") or t.get("version", ""),
-            (o.get("OrderID", "") if o else "")
-            or str(t.get("order_id", "")),
-            e["when"] or t.get("date", ""),
-            str(t.get("qty_ordered", "") if t
-                else o.get("Quantity", "")),
-            str(t.get("qty_received", "")) if t else "",
-            e["status"],
-            e["priority"] if e["kind"] == "app" else "",
-            e["who"],
-            (o.get("Recipient", "") if o else t.get("recipient", "")),
-        ])
-        _bg.append(_paint_by.get(e["status"], "#ffffff"))
-    ui.native_table(_heads, _cells, _bg, link_col="M-Code", index=True)
-
-    st.caption(overview_board.LEGEND)
-    st.caption(
-        "The M-Code opens the part on **Part Detail** in a new tab. Statuses "
-        "are reconciled with the part ledger: a receipt on the sheet moves "
-        "an order forward even before anyone updates the Orders tab."
-    )
+        st.caption(overview_board.LEGEND)
+        st.caption(
+            "The M-Code opens the part on **Part Detail** in a new tab. "
+            "Statuses are reconciled with the part ledger: a receipt on the "
+            "sheet moves an order forward even before anyone updates the "
+            "Orders tab."
+        )

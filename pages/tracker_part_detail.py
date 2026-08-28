@@ -23,8 +23,8 @@ user = require_auth()
 
 st.title("🔍 Part Detail")
 
-# A table cell can be a hyperlink but not a button, so the All Orders Table
-# View links here by ADDRESS: ?project=...&part=... (a link opens a fresh
+# A table cell can be a hyperlink but not a button, so every table's M-Code
+# links here by ADDRESS: ?project=...&part=... (a link opens a fresh
 # browser tab, and a fresh tab shares no session state). Consumed once and
 # cleared — left in place, the URL would keep re-narrowing the scope and
 # fight the sidebar switcher. Clearing after reading also makes the links

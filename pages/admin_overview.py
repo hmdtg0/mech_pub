@@ -1,14 +1,16 @@
-"""Overview — every part, every order thread, and everything moving.
+"""Overview — the admin's one page: the board, and the orders desk.
 
-The one screen that answers "where does this part stand": what was ordered,
-how many arrived, how many are on hand, what is on its way to whom, with
-which courier, and what stayed behind with the sender.
+🗺 Board: every part, every order thread, and everything moving — the
+screen that answers "where does this part stand". 📦 Orders: every order
+as a card with actions — the workqueue that WAS the All Orders page,
+merged here 28 Aug (Hamid: "less pages to track, there are many"). The
+view switch renders ONE section per rerun — deliberately not st.tabs,
+which builds every tab's content on every rerun and would make each click
+pay for both sections.
 
-`utils/overview_board.py` builds the rows and owns the colours; this file
-filters and draws them.
-
-Read-only. Orders are raised on Order from BOM, movements recorded on
-Process Order.
+`utils/overview_board.py` builds the board rows and owns the colours;
+`utils/orders_desk.py` is the orders desk. The board is read-only; orders
+are raised on Order from BOM, movements recorded on Process Order.
 """
 import streamlit as st
 
@@ -16,14 +18,22 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from utils.auth import require_role
-from utils import (movements_store, overview_board, parts_tracker,
-                   project_colors, project_registry, shipments_store,
-                   stock_store, ui, user_store)
+from utils import (movements_store, orders_desk, overview_board,
+                   parts_tracker, project_colors, project_registry,
+                   shipments_store, stock_store, ui, user_store)
 
-require_role("admin", "engineer", "logistics")
+user = require_role("admin", "engineer", "logistics")
 
 st.title("📊 Overview")
 
+_view = st.radio("View", ["🗺 Board", "📦 Orders"], horizontal=True,
+                 key="ov_view", label_visibility="collapsed")
+
+if _view.endswith("Orders"):
+    orders_desk.render(user)
+    st.stop()
+
+# ---- 🗺 the Board -----------------------------------------------------------
 c1, c2 = st.columns([4, 1.2], vertical_alignment="bottom")
 with c1:
     query = st.text_input("🔍 Search",
@@ -75,7 +85,6 @@ sheets = project_registry.all_projects()
 st.markdown("**Projects** — " + " ".join(
     project_colors.badge_html(name, sheet_id=sheets.get(name, ""))
     for name in sorted({r["Project"] for r in rows})), unsafe_allow_html=True)
-
 
 # The native grid, via the one shared renderer (ui.native_table, 28 Aug —
 # Hamid's engine verdict, applied app-wide). M-Code opens Part Detail in a

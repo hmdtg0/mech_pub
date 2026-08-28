@@ -85,9 +85,10 @@ logistics_pages = [
 # itself would allow: the nav list IS the outer gate, and the two must agree.
 work_pages = [
     # Overview is the landing page: the one screen that answers "where does
-    # everything stand" (Hamid, 21 Aug).
+    # everything stand" (Hamid, 21 Aug). Since 28 Aug it also carries the
+    # orders desk (the old All Orders page) behind its Board/Orders switch —
+    # "less pages to track".
     st.Page("pages/admin_overview.py", title="Overview", icon="🗂", default=True),
-    st.Page("pages/admin_all_orders.py", title="All Orders", icon="📊"),
     st.Page("pages/admin_process_order.py", title="Process Order", icon="🔧"),
 ]
 
