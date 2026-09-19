@@ -214,28 +214,36 @@ def courier_of(leg: dict):
 def match_arrivals(sent: List[dict], arrived: List[dict]):
     """Pair each Shipping leg with the Delivery/Return that closes it.
 
-    Matched on recipient and date order, preferring an equal quantity. Hand-
-    typed rows carry no consignment id, so this is the only honest key there
-    is; an arrival that matches nothing is kept and shown, never dropped.
+    Matched on recipient and date order. Hand-typed rows carry no consignment
+    id, so this is the only honest key there is; an arrival that matches
+    nothing is kept and shown, never dropped.
+
+    Equal quantities pair FIRST, across every leg, and only then does a
+    leftover arrival close the earliest leg it could belong to (19 Sep 2026).
+    With 📬 Arrived, two legs to one recipient are routine, and leg-by-leg
+    pairing handed a 20-piece arrival to the 10-piece leg that merely shipped
+    earlier — leaving the wrong leg open for the next person to book in.
     """
     free = list(arrived)
-    pairs = []
-    for leg in sorted(sent, key=lambda r: _day(r.get("date", "")) or (0, 0)):
-        left = _day(leg.get("date", "")) or (0, 0)
-        want = to_int(leg.get("qty"))
-        best = None
-        for cand in free:
-            if not same_name(cand.get("to", ""), leg.get("to", "")):
+    legs = sorted(sent, key=lambda r: _day(r.get("date", "")) or (0, 0))
+    closed_by = {}
+    for exact in (True, False):
+        for leg in legs:
+            if id(leg) in closed_by:
                 continue
-            if (_day(cand.get("date", "")) or (99, 99)) < left:
-                continue
-            if best is None or (to_int(cand.get("qty")) == want
-                                and to_int(best.get("qty")) != want):
-                best = cand
-        if best is not None:
-            free.remove(best)
-        pairs.append((leg, best))
-    return pairs, free
+            left = _day(leg.get("date", "")) or (0, 0)
+            want = to_int(leg.get("qty"))
+            for cand in free:
+                if not same_name(cand.get("to", ""), leg.get("to", "")):
+                    continue
+                if (_day(cand.get("date", "")) or (99, 99)) < left:
+                    continue
+                if exact and to_int(cand.get("qty")) != want:
+                    continue
+                closed_by[id(leg)] = cand
+                free.remove(cand)
+                break
+    return [(leg, closed_by.get(id(leg))) for leg in legs], free
 
 
 def _held(part_id: str, project: str, holder: str = ""):
@@ -354,8 +362,15 @@ def rows(orders: Optional[List[dict]] = None, legs: Optional[List[dict]] = None,
             seen_parts.add((project, code.lower()))
         sent = [r for r in members
                 if str(r.get("event", "")).lower() == "shipping"]
+        # Only a Delivery closes a Shipping leg. A Return states both ends
+        # and moves both counts itself — a complete journey, never the
+        # arrival of some OTHER shipment (19 Sep 2026: one was closing an
+        # unrelated open leg to the same recipient, which would have hidden
+        # that leg from 📬 Arrived).
         arrived = [r for r in members
-                   if str(r.get("event", "")).lower() in ("delivery", "return")]
+                   if str(r.get("event", "")).lower() == "delivery"]
+        returned = [r for r in members
+                    if str(r.get("event", "")).lower() == "return"]
         pairs, spare = match_arrivals(sent, arrived)
         open_legs = [leg for leg, arr in pairs if arr is None]
 
@@ -375,6 +390,11 @@ def rows(orders: Optional[List[dict]] = None, legs: Optional[List[dict]] = None,
             })
             row.update(over)
             return row
+
+        for ret in returned:
+            out.append(leg_row(ret, Courier=str(ret.get("courier", "") or ""),
+                               **{"ETA / arrived": ret.get("date", ""),
+                                  "Status": DELIVERED}))
 
         if not open_legs and (pairs or spare):
             # Nothing of this part is moving, so its journeys collapse into

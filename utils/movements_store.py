@@ -78,9 +78,28 @@ def _load(sheet_id: Optional[str]) -> List[Dict[str, str]]:
             field = _FIELDS.get(key)
             if field and i < len(row) and str(row[i]).strip():
                 rec[field] = str(row[i]).strip()
+        if rec.get("date"):
+            rec["date"] = _as_written(rec["date"])
         if rec:
             out.append(rec)
     return out
+
+
+def _as_written(text: str) -> str:
+    """The app writes "19 Sep 2026"; a USER_ENTERED write lets the sheet
+    re-spell it in its locale ("19 September 2026"), and the long form then
+    leaks onto the board, Shipments and every label built from a leg. Put
+    back what was written — that exact shape only; anything a person typed
+    their own way is left alone."""
+    from datetime import datetime
+
+    parts = text.strip().split()
+    if len(parts) != 3 or len(parts[1]) <= 3:      # already short, or not it
+        return text
+    try:
+        return datetime.strptime(text.strip(), "%d %B %Y").strftime("%d %b %Y")
+    except ValueError:
+        return text
 
 
 def fetch(sheet_id: Optional[str] = None) -> List[Dict[str, str]]:

@@ -8,7 +8,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.auth import is_admin, require_auth
 from utils import (history_entry, parts_tracker, project_colors,
                    project_registry)
-from utils.tracker_parse import is_selected, order_origin, order_recipient
+from utils.tracker_parse import (is_selected, newest_first, order_origin,
+                                 order_recipient)
 from utils.ui import require_single_project
 
 user = require_auth()
@@ -107,7 +108,8 @@ st.markdown("---")
 history_entry.history_table(mcode, _project_sheet)
 if history:
     with st.expander("Notes on each row"):
-        for h in history:
+        # Same newest-first order as the table above it.
+        for h in newest_first(history):
             if h.get("notes"):
                 st.markdown("**%s — %s**" % (h.get("date") or "?",
                                              h.get("order_id") or h.get("version") or ""))

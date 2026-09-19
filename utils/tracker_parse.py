@@ -85,6 +85,80 @@ def display_event(row) -> str:
             and to_int(row.get("qty_received", "")) > 0):
         return EVENT_RECEIPT
     return ev
+
+
+_MONTH_NUM = {m: i + 1 for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun",
+     "jul", "aug", "sep", "oct", "nov", "dec"])}
+
+
+def event_day(text):
+    """(year, month, day) a ledger date names — 0 for any part it does not
+    state, None when it names nothing at all.
+
+    The Date column is hand-typed on migrated rows: "~13 Apr 2026",
+    "16-21 Apr 2026" (a range takes its LAST day, as calendar_day does),
+    "22 Jun", "Sep 2026", "2026 (T2)", ISO from some forms, dd/mm/yyyy
+    from others. Read for ORDERING only — never to rewrite what the cell
+    says."""
+    value = str(text or "").strip().lower()
+    if not value:
+        return None
+    iso = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", value)
+    if iso:
+        return int(iso.group(1)), int(iso.group(2)), int(iso.group(3))
+    slash = re.search(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", value)
+    if slash:
+        return int(slash.group(3)), int(slash.group(2)), int(slash.group(1))
+    named = re.search(
+        r"(\d{1,2})\s*(?:[-–]\s*(\d{1,2}))?\s*([a-z]{3,9})\.?,?\s*(\d{4})?",
+        value)
+    if named and _MONTH_NUM.get(named.group(3)[:3]):
+        return (int(named.group(4) or 0), _MONTH_NUM[named.group(3)[:3]],
+                int(named.group(2) or named.group(1)))
+    month_year = re.search(r"\b([a-z]{3,9})\.?,?\s*(\d{4})\b", value)
+    if month_year and _MONTH_NUM.get(month_year.group(1)[:3]):
+        return int(month_year.group(2)), _MONTH_NUM[month_year.group(1)[:3]], 0
+    year = re.search(r"\b(20\d{2})\b", value)
+    if year:
+        return int(year.group(1)), 0, 0
+    return None
+
+
+def newest_first(history):
+    """The ledger rows newest-first by the date they HAPPENED (Hamid,
+    19 Sep 2026: "the history should be ordered time based, newest on
+    top"). Sheet order is append order, and a repair or a backfill is
+    appended long after the day it records — M105's 19 Jul arrival sat
+    below a 15 Sep shipment.
+
+    Hand-typed dates are read as far as they go: a date with no year takes
+    the year of the dated row before it (else after it), and a row whose
+    date says nothing sorts with the row it was appended after. Same day:
+    the later-appended row is the newer. The rows themselves are untouched.
+    """
+    rows = list(history)
+    days = [event_day(r.get("date", "")) for r in rows]
+    full_years = [d[0] for d in days if d and d[0]]
+    keys = []
+    last = None
+    for i, day in enumerate(days):
+        if day and not day[0]:
+            year = (last[0] if last else
+                    next((d[0] for d in days[i + 1:] if d and d[0]),
+                         full_years[0] if full_years else 0))
+            day = (year, day[1], day[2])
+        if day is None:
+            day = last
+        if day is not None:
+            last = day
+        keys.append(day)
+    first_known = next((k for k in keys if k is not None), (0, 0, 0))
+    keys = [k if k is not None else first_known for k in keys]
+    order = sorted(range(len(rows)), key=lambda i: (keys[i], i), reverse=True)
+    return [rows[i] for i in order]
+
+
 EVENT_MOVEMENT = "Movement"
 
 MOVEMENT_FIELDS = {

@@ -28,8 +28,8 @@ from utils.auth import is_admin
 from utils.google_client import get_gspread_client
 from utils.orders_store import (fetch_all_orders,
                                 fetch_orders_for_part, update_order)
-from utils.tracker_parse import (display_event, holder_of,
-                                 is_selected, place_of, to_int)
+from utils.tracker_parse import (display_event, event_day, holder_of,
+                                 is_selected, newest_first, place_of, to_int)
 
 
 def _flash_key(ns: str) -> str:
@@ -53,6 +53,11 @@ def history_table(mcode: str, record_id: str) -> None:
         st.caption("No history rows on this part's tab yet — the entries "
                    "you add below become its first.")
         return
+    # Newest on top, by the date each line HAPPENED (Hamid, 19 Sep) — the
+    # sheet keeps append order, and a backfill is typed long after its day.
+    _hist = newest_first(_hist)
+    st.caption("Newest first — ordered by the date each line happened, not "
+               "by when it was typed in.")
     ui.native_table(
         ["Date", "Event", "Order / Sample ID", "Version", "Build",
          "Qty ordered", "Qty moved", "Qty received", "From", "To",
@@ -109,6 +114,99 @@ def default_sender(holdings: dict, my_names) -> str:
         if name in my_names:
             return name
     return max(holdings, key=lambda h: holdings[h])
+
+
+def open_legs(record_id: str, project: str) -> dict:
+    """{part code, lower-cased: [legs]} — shipments still on their way, the
+    ones 📬 Arrived can book in (Hamid, 19 Sep: "build the arrived action").
+
+    🚚 Ship only takes goods OUT of the sender's count; until this verb
+    nothing put them INTO the receiver's, so a shipped leg stayed "in
+    transit" for ever and the destination never counted them.
+
+    A leg is offered when the board would still call it open (no Delivery
+    pairs with it) AND it is safe to count:
+      - the app wrote it (`logged_by`) — a migrated leg's arrival may already
+        sit in the counts some other way, and booking it in would count twice;
+      - it states a number, a sender and a destination;
+      - the sender holds stock — a leg FROM a vendor/source is an order
+        arriving, which is 📥 Receive's job (it moves the order's received
+        total; this verb must not);
+      - the part's ledger records it — an orphan row is a drift to settle,
+        not goods to book in.
+    """
+    from utils import overview_board
+
+    by_part = {}
+    for row in movements_store.shipments(record_id):
+        code = str(row.get("part_id", "")).strip()
+        if code:
+            by_part.setdefault(code.lower(), []).append(
+                dict(row, project=project))
+    out = {}
+    for code, rows in by_part.items():
+        sent = [r for r in rows
+                if str(r.get("event", "")).strip().lower() == "shipping"]
+        # Only a Delivery closes a leg — a Return is its own whole journey
+        # (the board applies the same rule).
+        arrived = [r for r in rows
+                   if str(r.get("event", "")).strip().lower() == "delivery"]
+        pairs, _spare = overview_board.match_arrivals(sent, arrived)
+        legs = []
+        for leg, arrival in pairs:
+            sender = str(leg.get("from", "")).strip()
+            if (arrival is not None
+                    or not str(leg.get("logged_by", "")).strip()
+                    or to_int(leg.get("qty", "")) <= 0
+                    or not str(leg.get("to", "")).strip()
+                    or not sender or sender == "(external)"
+                    or holders_store.get(sender).get(
+                        "kind", "person").lower() == "source"
+                    or overview_board.is_orphan(leg)):
+                continue
+            legs.append(leg)
+        if legs:
+            out[code] = legs
+    return out
+
+
+def leg_label(leg: dict) -> str:
+    """One open leg, said the way the person who shipped it would."""
+    bits = ["%s pcs" % to_int(leg.get("qty", "")),
+            "%s → %s" % (leg.get("from", "?"), leg.get("to", "?")),
+            "shipped %s" % (leg.get("date", "") or "?")]
+    if str(leg.get("courier", "")).strip():
+        bits.append(str(leg.get("courier", "")).strip())
+    return " · ".join(bits)
+
+
+def consignment_siblings(leg: dict, legs_by_part: dict) -> list:
+    """Other parts' open legs that travelled in the SAME box: same tracking
+    text, same day, same sender and destination. Batch shipping writes one
+    leg per part under one tracking number; this is how the arrival finds
+    them again. No tracking text, no siblings — nothing else ties legs
+    together honestly."""
+    from utils import shipments_store
+
+    tracking = str(leg.get("courier", "")).strip().lower()
+    if not tracking:
+        return []
+    day = shipments_store.calendar_day(leg.get("date", ""))
+    mine = str(leg.get("part_id", "")).strip().lower()
+    out = []
+    for code, legs in legs_by_part.items():
+        if code == mine:
+            continue
+        for other in legs:
+            if (str(other.get("courier", "")).strip().lower() == tracking
+                    and shipments_store.calendar_day(
+                        other.get("date", "")) == day
+                    and str(other.get("from", "")).strip().lower()
+                    == str(leg.get("from", "")).strip().lower()
+                    and str(other.get("to", "")).strip().lower()
+                    == str(leg.get("to", "")).strip().lower()):
+                out.append(other)
+    return out
 
 
 @st.dialog("➕ Add a name to the directory")
@@ -234,10 +332,19 @@ def render_entry(user, mcode: str, record_id: str, project: str,
         opts = [""] + _directory
         return opts.index(name) if name in opts else 0
 
+    # 📬 Arrived is the sixth verb and the only conditional one: it shows
+    # when THIS part has a shipment on its way, and is gone once it landed
+    # — the list stays as short as Joe asked whenever nothing is in transit.
+    _legs_by_part = open_legs(record_id, project)
+    _legs = _legs_by_part.get(mcode.strip().lower(), [])
+
     verbs = []
     if order:
         verbs.append(("receive", "📥 Receive"))
-    verbs += [("ship", "🚚 Ship"), ("hand", "🤝 Hand over"),
+    verbs.append(("ship", "🚚 Ship"))
+    if _legs:
+        verbs.append(("arrived", "📬 Arrived"))
+    verbs += [("hand", "🤝 Hand over"),
               ("scrap", "🗑 Scrap"), ("note", "📝 Note"),
               ("more", "➕ More…")]
     if order:
@@ -558,7 +665,9 @@ def render_entry(user, mcode: str, record_id: str, project: str,
                 st.rerun()
         else:
             st.caption("Takes the quantity out of the sender's count — "
-                       "goods on their way out.")
+                       "goods on their way out. When they land, **📬 "
+                       "Arrived** (it appears here while a shipment is on "
+                       "its way) books them in at the destination.")
             with st.form("he_form_ship_%s" % ns):
                 s1, s2, s3 = st.columns(3)
                 with s1:
@@ -583,6 +692,117 @@ def render_entry(user, mcode: str, record_id: str, project: str,
                                qty_moved=str(_q), courier=_courier,
                                eta=_eta.strftime("%d %b %Y") if _eta
                                else "", notes=_notes)
+
+    # === 📬 Arrived ======================================================
+    # The other half of 🚚 Ship (Hamid, 19 Sep: "build the arrived action").
+    # Writes the Delivery event the ledger has always recognised: stock IN
+    # at the destination, and the board pairs it with its Shipping leg. The
+    # app knows everything but the day and the count, so that is all it asks.
+    elif verb == "arrived":
+        st.caption("Books a shipment in where it was going — adds it to the "
+                   "receiver's count and closes the leg. The other half of "
+                   "🚚 Ship.")
+        _leg_labels = {}
+        for _l in _legs:
+            _label = leg_label(_l)
+            while _label in _leg_labels:          # two identical legs
+                _label += " ·"
+            _leg_labels[_label] = _l
+        if len(_legs) > 1:
+            _leg = _leg_labels[st.selectbox(
+                "Which shipment arrived?", list(_leg_labels),
+                key="he_leg_%s" % ns)]
+        else:
+            _leg = _legs[0]
+            st.markdown("**%s**" % next(iter(_leg_labels)))
+        _shipped = to_int(_leg.get("qty", ""))
+        _sibs = consignment_siblings(_leg, _legs_by_part)
+        with st.form("he_form_arrived_%s" % ns):
+            a1, a2, a3 = st.columns(3)
+            with a1:
+                _qty = st.text_input("Qty arrived", value=str(_shipped))
+            with a2:
+                _date = st.date_input("Date arrived", value=_today)
+            with a3:
+                _notes = st.text_input("Notes")
+            _whole = False
+            if _sibs:
+                _whole = st.checkbox(
+                    "📦 The whole consignment arrived — also books in: %s"
+                    % ", ".join("%s ×%s" % (s.get("part_id", "?"),
+                                            to_int(s.get("qty", "")))
+                                for s in _sibs), value=True)
+            _go = st.form_submit_button("📬 Book it in", type="primary")
+        if _go:
+            _q = to_int(_qty)
+            if _q <= 0:
+                st.error("How many arrived? The quantity is needed.")
+                st.stop()
+            if _q > _shipped:
+                st.error("%s were shipped — %s cannot arrive. If more turned "
+                         "up than the sender recorded, the shipment is what "
+                         "needs correcting." % (_shipped, _q))
+                st.stop()
+            if _q < _shipped and not _notes.strip():
+                st.error("Fewer arrived than the %s shipped — say why in "
+                         "**Notes** (lost, damaged, a second box to follow). "
+                         "The shortfall stays out of every count."
+                         % _shipped)
+                st.stop()
+            _left = event_day(_leg.get("date", ""))
+            if (_left and all(_left)
+                    and (_date.year, _date.month, _date.day) < _left):
+                st.error("It shipped on %s — it cannot arrive before that."
+                         % _leg.get("date", ""))
+                st.stop()
+            now = datetime.now()
+            _who = user.get("email", "") or user.get("name", "")
+            _done, _failed = [], []
+            for _l, _n in [(_leg, _q)] + (
+                    [(s, to_int(s.get("qty", ""))) for s in _sibs]
+                    if _whole else []):
+                _mine = _l is _leg
+                _pm = mcode if _mine else str(_l.get("part_id", "")).strip()
+                _twin = movements_store.ledger_twin(_l) or {}
+                _why = (_notes.strip() or "arrived — shipped %s"
+                        % (_l.get("date", "") or "earlier"))
+                ok, message = tracker_writer.append_history(_pm, {
+                    "event": "Delivery",
+                    "date": _date.strftime("%d %b %Y"),
+                    # The arrival belongs to the thread its shipment is on.
+                    "order_id": (str(_twin.get("order_id", "")).strip()
+                                 or (order_id if _mine else "")),
+                    "version": (_twin.get("version", "")
+                                or (((order or {}).get("Version", "")
+                                     or version) if _mine else "")),
+                    "build": _twin.get("build", ""),
+                    "qty_moved": str(_n),
+                    "place": str(_l.get("from", "")).strip(),
+                    "holder": str(_l.get("to", "")).strip(),
+                    "courier": str(_l.get("courier", "")).strip(),
+                    "selected": "FALSE", "logged_by": _who,
+                    "logged_at": now.strftime("%d %b %Y %H:%M"),
+                    "notes": _why, "type": "Delivery",
+                }, sheet_id=record_id)
+                if not ok:
+                    _failed.append(_pm)
+                    continue
+                res = stock_store.record_movement(
+                    _pm, project, _n, str(_l.get("to", "")).strip(),
+                    str(_l.get("from", "")).strip(), event="Delivery",
+                    description=_l.get("description", ""),
+                    part_type=_l.get("type", ""), notes=_why,
+                    courier=str(_l.get("courier", "")).strip(),
+                    build=_l.get("build", ""),
+                    date=_date.strftime("%d %b %Y"), logged_by=_who)
+                (_done if res.get("ok") else _failed).append(_pm)
+            _after_ledger_write()
+            flash(ns, "warning" if _failed else "success",
+                  "Booked in %d part(s) at %s%s."
+                  % (len(_done), _leg.get("to", "?"),
+                     " — NOT counted: %s" % ", ".join(_failed)
+                     if _failed else ""))
+            st.rerun()
 
     # === 🤝 Hand over ====================================================
     elif verb == "hand":
