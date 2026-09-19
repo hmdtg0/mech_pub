@@ -13,8 +13,8 @@ from datetime import datetime
 from utils.auth import require_role
 from utils.google_client import get_gspread_client
 from utils.orders_store import fetch_all_orders, update_order
-from utils import (history_entry, parts_tracker, project_colors,
-                   project_registry, tracker_orders, ui)
+from utils import (history_entry, overview_board, parts_tracker,
+                   project_colors, project_registry, tracker_orders, ui)
 from utils.tracker_parse import holder_of
 from utils.drive_handler import download_file_bytes, download_to_local
 from utils.message_store import fetch_messages_for_order, send_message
@@ -33,6 +33,13 @@ orders = fetch_all_orders()
 if not orders:
     st.info("No orders to process.")
     st.stop()
+
+# Close Details asked for clean grids — pop their tick state BEFORE any
+# grid instantiates this run (widget state can't be touched after).
+if st.session_state.pop("po_clear_ticks", False):
+    for _k in [k for k in st.session_state
+               if str(k).startswith(("po_sel_", "_ntbl_prev_po_sel_"))]:
+        st.session_state.pop(_k, None)
 
 # The worklist spans every project (writes are safe either way — each order
 # is filed to ITS OWN project's record, resolved per order below).
@@ -142,25 +149,27 @@ def order_facts(o):
             owner, eta, detail)
 
 
-status_icons = {"new": "⚪", "ordered": "🟠",
-                "shipped": "🟣", "delivered": "🟢", "cancelled": "🚫"}
-
-
-def _select_order(oid: str) -> None:
-    """Open's on_click. A callback runs BEFORE the script body, so ONE
-    click opens the order (19 Sep user test: the old button-return
-    pattern needed two, and the selection could drop on a dialog
-    dismiss)."""
-    st.session_state["process_order_id"] = oid
-
-
+# The worklist rows paint by status like every colour-coded table in the
+# app (the All Orders table view uses the same map + legend).
+_paint_by = {
+    "new": overview_board.COLOURS[overview_board.ORDERED],
+    "ordered": overview_board.COLOURS[overview_board.ORDERED],
+    "shipped": overview_board.COLOURS[overview_board.SHIPPED],
+    "delivered": overview_board.COLOURS[overview_board.DELIVERED],
+    "cancelled": overview_board.COLOURS[overview_board.CANCELLED],
+}
 
 # One stable colour per Type across all three tabs.
 _all_types = sorted({str(o.get("Process", "") or "—") for o in orders})
 
 
 def render_orders(order_list, key_prefix):
-    """The grouped order list; Open selects via _select_order."""
+    """The worklist: the Type bands stay, the rows under each are the
+    app's one native grid (Hamid, 19 Sep: "change the tabs to our table
+    style, considering the tabs as is and the categories we defined").
+    Ticking a row opens the order below — the grid's own single-row
+    select, still one click (the 19 Sep user-test rule); the M-Code
+    opens Part Detail in a new tab like every other table."""
     if not order_list:
         st.info("Nothing here.")
         return
@@ -177,34 +186,33 @@ def render_orders(order_list, key_prefix):
             % (slot["hex"], slot["hex"], type_name,
                len(groups[type_name])),
             unsafe_allow_html=True)
+        _heads = ["M-Code", "Part", "Status", "Latest", "Owner", "ETA"]
+        if _multi_project:
+            _heads = ["Project"] + _heads
+        _cells, _bg = [], []
         for o in groups[type_name]:
-            oid = o.get("OrderID", "?")
-            part = o.get("PartName", "?")
-            pid = o.get("PartID", "")
-            pri = o.get("Priority", "Normal")
-            eta = o.get("ETA", "")
             effective, owner, eta_hist, detail = order_facts(o)
-            icon = status_icons.get(effective, "⚪")
-            pri_icon = "🔴" if pri == "URGENT" else ""
-
-            cols = st.columns([0.4, 3.2, 1.3, 2.4, 1.3, 0.8])
-            with cols[0]:
-                st.markdown(f"{icon}")
-            with cols[1]:
-                owner_bit = f" — 👤 {owner}" if owner else ""
-                ptag = (project_colors.tag((o.get("Project") or "").strip()) + " "
-                        if _multi_project and (o.get("Project") or "").strip()
-                        else "")
-                st.markdown(f"{ptag}**{part}** `{pid}`{owner_bit} {pri_icon}")
-            with cols[2]:
-                st.markdown(f"`{effective.upper()}`")
-            with cols[3]:
-                st.markdown(detail or "—")
-            with cols[4]:
-                st.markdown(f"ETA: {eta or eta_hist or '-'}")
-            with cols[5]:
-                st.button("Open", key=f"open_{key_prefix}_{oid}",
-                          on_click=_select_order, args=(oid,))
+            pri_icon = "🔴 " if o.get("Priority", "") == "URGENT" else ""
+            row = [
+                ui.part_url(o.get("Project", ""),
+                            o.get("PartID", "")) or "—",
+                pri_icon + str(o.get("PartName", "") or "?"),
+                effective,
+                detail or "",
+                owner,
+                str(o.get("ETA", "") or "").strip() or eta_hist or "",
+            ]
+            if _multi_project:
+                row.insert(0, (o.get("Project") or "").strip())
+            _cells.append(row)
+            _bg.append(_paint_by.get(effective, "#ffffff"))
+        picked = ui.native_table(
+            _heads, _cells, _bg, link_col="M-Code",
+            select_key="po_sel_%s_%s" % (key_prefix, type_name))
+        if picked is not None:
+            st.session_state["process_order_id"] = \
+                groups[type_name][picked].get("OrderID", "")
+    st.caption(overview_board.LEGEND)
 
 
 # --- Three views: active / delivered / everything submitted ---
@@ -230,7 +238,7 @@ with tab_all:
 
 sel_id = st.session_state.get("process_order_id")
 if not sel_id:
-    st.info("Click **Open** on an order above to process it.")
+    st.info("Tick a row above to open its order here.")
     st.stop()
 
 # Find the selected order
@@ -245,6 +253,12 @@ if not order:
 st.markdown("---")
 if st.button("⬆ Close Details", key="collapse_btn"):
     del st.session_state["process_order_id"]
+    # Ask the NEXT run to drop the grids' tick state too — popped up top,
+    # before the grids instantiate (the OFB pending-reset idiom). A
+    # lingering tick on a closed order would need un-ticking before that
+    # row could re-open, and the change-only return in ui.native_table
+    # never re-fires a held tick.
+    st.session_state["po_clear_ticks"] = True
     st.rerun()
 
 order_id = order.get("OrderID", "?")

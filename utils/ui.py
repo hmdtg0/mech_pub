@@ -202,7 +202,7 @@ def require_single_project(purpose: str = "This page"):
 
 
 def native_table(columns, rows, backgrounds=None, link_col: str = "",
-                 index: bool = False) -> None:
+                 index: bool = False, select_key: str = ""):
     """The ONE table renderer: the native grid, app-wide (Hamid, 28 Aug \u2014
     "make sure the native table view is globally across the app").
 
@@ -218,6 +218,14 @@ def native_table(columns, rows, backgrounds=None, link_col: str = "",
 
     A column whose every value is an int stays numeric so the grid's
     sort-by-click sorts 20 before 100; anything mixed becomes text.
+
+    `select_key` (19 Sep 2026, Process Order worklist) turns on the grid's
+    own single-row tick and returns the picked row's position in `rows` \u2014
+    the grid reports positions in the data you passed, whatever column the
+    viewer sorted by. Returned ONLY on the rerun where the tick changed,
+    else None: acting on every rerun would re-open whatever a page's
+    close button just closed. Without `select_key` (everywhere else) the
+    grid renders exactly as before and returns None.
     """
     import pandas as pd
     import streamlit as st
@@ -262,6 +270,15 @@ def native_table(columns, rows, backgrounds=None, link_col: str = "",
         config[link_col] = st.column_config.LinkColumn(
             link_col, help="Opens the part on Part Detail \u2014 the grid always "
                            "opens links in a new tab.")
+    if select_key:
+        event = st.dataframe(
+            styler, hide_index=True, height=table_height(len(df)),
+            use_container_width=True, column_config=config or None,
+            key=select_key, on_select="rerun", selection_mode="single-row")
+        picked = list(event.selection.rows) if event.selection else []
+        prev = st.session_state.get("_ntbl_prev_" + select_key)
+        st.session_state["_ntbl_prev_" + select_key] = picked
+        return picked[0] if picked and picked != prev else None
     st.dataframe(styler, hide_index=True, height=table_height(len(df)),
                  use_container_width=True, column_config=config or None)
 
