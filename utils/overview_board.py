@@ -27,6 +27,11 @@ box carries several parts, and the wrong tracking number is worse than none
 (`shipments_store.same_day` has the long version). Since 28 Aug the matched
 courier has no column — its name shows AS the Status text of a healthy
 moving row (`status_label`).
+
+What a leg says about ITSELF is not a lead (19 Sep): its own Courier /
+Tracking cell and the ETA on its ledger twin were typed by the sender on
+that very movement, so they are believed — a leg that names its tracking
+number is in transit, not "untracked".
 """
 from __future__ import annotations
 
@@ -73,7 +78,8 @@ LEGEND = (
     "🟧 orange — what the sender still holds after a part shipment "
     "· 🟢 green — delivered · ⬜ grey — cancelled · "
     "🟥 red — the ETA on a consignment has passed, the leg has "
-    "neither tracking nor ETA, or a sender's count went negative."
+    "neither tracking nor ETA, the part's ledger does not record the "
+    "movement, or a sender's count went negative."
 )
 
 # Trimmed 28 Aug (Hamid): Owner and From location dropped; Courier and
@@ -169,15 +175,36 @@ def route_agrees(courier: dict, leg: dict) -> bool:
     return True
 
 
+def is_orphan(leg: dict) -> bool:
+    """An APP-WRITTEN movement the part's ledger does not record. The app
+    writes the history row first and this log second, so a logged row with
+    no twin means someone removed the history line by hand — the count and
+    the ledger have drifted. Migrated rows (no `logged_by`) never had a
+    twin to lose, so they are not judged."""
+    return (bool(str(leg.get("logged_by", "") or "").strip())
+            and movements_store.ledger_twin(leg) is None)
+
+
 def courier_of(leg: dict):
-    """(courier, tracking, eta, note) — filled only when one record fits."""
+    """(courier, tracking, eta, note).
+
+    A leg's OWN "Courier / Tracking" text is a stated fact — typed by the
+    person who shipped it — and its ledger twin carries the ETA they gave
+    (19 Sep 2026; until then only the hand-kept central courier tab was
+    believed, and a leg naming its own tracking number was painted red as
+    "no courier record"). One same-day central record that agrees on the
+    route still wins where it has the fact, and stays a lead otherwise."""
     own = str(leg.get("courier", "") or "").strip()
+    twin = movements_store.ledger_twin(leg) or {}
+    own_eta = str(twin.get("eta", "") or "").strip()
     found = [c for c in shipments_store.same_day(leg.get("date", ""))
              if route_agrees(c, leg)]
     if len(found) == 1:
         one = found[0]
-        return (one.get("courier", "") or own, one.get("tracking", ""),
-                one.get("eta", ""), "")
+        return (one.get("courier", "") or own, one.get("tracking", "") or own,
+                one.get("eta", "") or own_eta, "")
+    if own or own_eta:
+        return own, own, own_eta, ""
     if len(found) > 1:
         return own, "", "", ("%d courier records that day — confirm which"
                              % len(found))
@@ -399,6 +426,12 @@ def rows(orders: Optional[List[dict]] = None, legs: Optional[List[dict]] = None,
                 status = UNTRACKED
                 if not note:
                     note = "courier record has no tracking or ETA"
+            if is_orphan(leg):
+                # Outranks the courier story: a movement the ledger does
+                # not record cannot be reconciled with anything.
+                status = UNTRACKED
+                note = ("not on the part's ledger — its history row is "
+                        "gone; settle or remove this movement row")
             out.append(leg_row(leg, Courier=courier, Tracking=tracking,
                                **{"ETA / arrived": eta, "Status": status,
                                   "Attention": note}))

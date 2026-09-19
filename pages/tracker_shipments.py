@@ -6,16 +6,18 @@ travelled is now a fact of each project's own movement log: a row whose
 projects, so a consignment carrying parts for two projects appears once per
 project rather than in a fourth hand-kept tab.
 
-**Two sources, on purpose.** The ledger knows WHAT travelled — part, quantity,
-which project, from whom to whom. The main record's `Shipments` tab knows HOW
-— courier, tracking number, ETA, whether it arrived. Neither carries the
-other's facts, and neither is complete. They are shown side by side and the
-gaps are named, because a page that silently merged them would have to guess,
-and a guessed tracking number is worse than a missing one.
+**What a shipment says about itself is believed (19 Sep 2026).** Since the
+🚚 Ship entry, the sender types Courier / Tracking and an ETA on the movement
+itself: the tracking text rides on the movement row, the ETA on its twin in
+the part's ledger (`movements_store.ledger_twin`). Those are stated facts and
+are shown as such.
 
-Same-day courier records are offered as a lead, never asserted as the
-shipment's tracking number: dates are hand-typed and one consignment can
-carry several parts.
+**The central `Shipments` tab stays a lead.** It is the hand-kept courier log
+from before the app — courier, tracking, ETA, whether it arrived — and shares
+no key with the movement log but the date. Same-day records are offered
+beside a leg, never asserted as its tracking number: dates are hand-typed and
+one consignment can carry several parts. A guessed tracking number is worse
+than a missing one.
 
 Read-only. Shipping events are recorded on Process Order.
 """
@@ -27,7 +29,8 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from utils.auth import require_auth
-from utils import movements_store, project_colors, shipments_store
+from utils import (movements_store, overview_board, project_colors,
+                   shipments_store)
 from utils import ui
 from utils.ui import literal
 
@@ -59,9 +62,9 @@ st.caption("**%d shipping events** from every project's movement log, and "
                                                              len(courier)))
 
 if not ledger and not courier:
-    st.info("Nothing has been logged as shipped yet. Shipping, Delivery and "
-            "Return events are recorded on **Process Order**; courier detail "
-            "is added to the central Shipments tab by logistics.")
+    st.info("Nothing has been logged as shipped yet. A shipment is recorded "
+            "with **🚚 Ship** under 📜 Add history entry (Process Order, or "
+            "the part's own page) — its tracking and ETA go in there too.")
     st.stop()
 
 with event_box:
@@ -82,7 +85,13 @@ courier_view = [r for r in courier if _matches(r)]
 
 # Which side of each pair has no counterpart. Same-day is the only key the two
 # logs share — see shipments_store.same_day for why it stays a lead, not a join.
-no_courier = [r for r in ledger if not shipments_store.same_day(r.get("date", ""))]
+# A leg that names its own courier / tracking documents itself: no gap.
+no_courier = [r for r in ledger
+              if not str(r.get("courier", "")).strip()
+              and not shipments_store.same_day(r.get("date", ""))]
+# App-written movements the part's ledger does not record — someone removed
+# the history line by hand, so the log (and maybe the count) stands alone.
+orphans = [r for r in ledger if overview_board.is_orphan(r)]
 ledger_days = {shipments_store.calendar_day(r.get("date", "")) for r in ledger}
 no_event = [c for c in courier
             if shipments_store.calendar_day(
@@ -91,18 +100,20 @@ no_event = [c for c in courier
 tab_moves, tab_courier, tab_gaps = st.tabs([
     "📦 What travelled (%d)" % len(view),
     "🚚 Courier records (%d)" % len(courier_view),
-    "⚠️ Gaps (%d)" % (len(no_courier) + len(no_event)),
+    "⚠️ Gaps (%d)" % (len(no_courier) + len(no_event) + len(orphans)),
 ])
 
 with tab_moves:
     if view:
         from utils.ui import native_table, part_url
         _heads = ["Date", "Project", "Event", "Part", "Description", "Qty",
-                  "From", "To", "Tracking (same day)", "Notes"]
+                  "From", "To", "Courier / Tracking", "ETA",
+                  "Courier log (same day)", "Notes"]
         _cells = []
         for r in sorted(view, key=lambda r: shipments_store.calendar_day(
                 r.get("date", "")) or (0, 0), reverse=True):
             leads = shipments_store.same_day(r.get("date", ""))
+            twin = movements_store.ledger_twin(r) or {}
             _cells.append([
                 r.get("date", ""), r.get("project", ""),
                 r.get("event", ""),
@@ -110,22 +121,27 @@ with tab_moves:
                 or "—",
                 r.get("description", ""), r.get("qty", ""),
                 r.get("from", ""), r.get("to", ""),
+                r.get("courier", "") or "—",
+                twin.get("eta", "") or "—",
                 "; ".join(c.get("tracking", "") for c in leads
                           if c.get("tracking")) or "—",
                 r.get("notes", ""),
             ])
         native_table(_heads, _cells, link_col="Part")
-        st.caption("“Tracking (same day)” is a courier record posted on the "
-                   "same date — a lead to confirm, not a stated fact. A dash "
-                   "in Part means the row records a batch rather than one "
+        st.caption("**Courier / Tracking** and **ETA** are what the sender "
+                   "entered on the shipment itself — stated facts. “Courier "
+                   "log (same day)” is a record in the hand-kept central log "
+                   "posted on the same date — a lead to confirm. A dash in "
+                   "Part means the row records a batch rather than one "
                    "M-code.")
     else:
         st.info("No shipping events match the current filters.")
 
 with tab_courier:
-    st.caption("The central courier log: how things travelled. This is where "
-               "tracking numbers, ETAs and delivery outcomes live — the "
-               "movement log does not carry them.")
+    st.caption("The hand-kept central courier log: tracking numbers, ETAs and "
+               "delivery outcomes recorded outside the app. A shipment "
+               "entered through 🚚 Ship carries its own tracking and ETA — "
+               "those show under **What travelled**.")
     if courier_view:
         newest_first = list(reversed(courier_view))
         st.dataframe(pd.DataFrame([{
@@ -189,9 +205,29 @@ with tab_gaps:
         } for c in no_event]), hide_index=True,
             height=ui.table_height(len(no_event)), use_container_width=True)
 
+    if orphans:
+        st.markdown("**On the movement log, but not on the part's ledger** — "
+                    "the app writes the history row first and the movement "
+                    "second, so the history line was removed by hand. The "
+                    "movement still feeds the board (and the count, unless "
+                    "the sender is a vendor): restore the history line, or "
+                    "remove this row from the project's Movements tab.")
+        st.dataframe(pd.DataFrame([{
+            "Date": r.get("date", ""),
+            "Project": r.get("project", ""),
+            "Event": r.get("event", ""),
+            "Part": r.get("part_id", "") or "—",
+            "Qty": r.get("qty", ""),
+            "From": r.get("from", ""), "To": r.get("to", ""),
+            "Courier / Tracking": r.get("courier", ""),
+            "Logged by": r.get("logged_by", ""),
+        } for r in orphans]), hide_index=True,
+            height=ui.table_height(len(orphans)), use_container_width=True)
+
     if no_courier:
-        st.markdown("**Shipped on a ledger, but no courier record that day** — "
-                    "how it travelled, and whether it arrived, is unrecorded.")
+        st.markdown("**Shipped, with no tracking of its own and no courier "
+                    "record that day** — how it travelled, and whether it "
+                    "arrived, is unrecorded.")
         st.dataframe(pd.DataFrame([{
             "Date": r.get("date", ""),
             "Project": r.get("project", ""),
@@ -203,9 +239,10 @@ with tab_gaps:
         } for r in no_courier]), hide_index=True,
             height=ui.table_height(len(no_courier)), use_container_width=True)
 
-    if not no_event and not no_courier:
-        st.success("Every shipping event has a courier record from the same "
-                   "day, and every courier record has an event.")
+    if not no_event and not no_courier and not orphans:
+        st.success("Every shipping event names its tracking or has a courier "
+                   "record from the same day, every courier record has an "
+                   "event, and every movement is on its part's ledger.")
 
 if ledger:
     seen = sorted({r.get("project", "") for r in ledger if r.get("project")})

@@ -150,6 +150,55 @@ def shipments_across_projects() -> List[Dict[str, str]]:
     return out
 
 
+def _same_name(a, b) -> bool:
+    a, b = str(a or "").strip().lower(), str(b or "").strip().lower()
+    return bool(a) and bool(b) and (a == b or a in b or b in a)
+
+
+def ledger_twin(leg: Dict[str, str]) -> Optional[Dict[str, str]]:
+    """The part-ledger row that recorded this same movement, or None.
+
+    Every app-written movement is the SECOND write of a pair: the part's
+    history row first, then this log (one direction: ledger -> log ->
+    count). The history row is the richer of the two — it alone carries
+    the ETA the sender typed — so a leg's courier facts are read back from
+    it (Hamid, 19 Sep 2026: "wire it"; until then the board and Shipments
+    only believed the hand-kept central courier tab, and painted a leg red
+    whose own row named its tracking number).
+
+    Matched on part, event, calendar day and destination; an equal quantity
+    breaks a tie. No id joins the two writes, so this is the only honest
+    key. None means the log row stands alone: normal for rows migrated from
+    the old logs, a drift worth a look for one the app wrote (`logged_by`).
+    """
+    from utils import parts_tracker, project_registry, shipments_store
+    from utils.google_client import active_sheet_id
+
+    code = str(leg.get("part_id", "")).strip().lower()
+    if not code:
+        return None
+    project = str(leg.get("project", "")).strip()
+    sheet_id = (project_registry.all_projects().get(project, "")
+                if project else active_sheet_id())
+    if not sheet_id:
+        return None
+    history = next((part.get("history", []) for name, part
+                    in parts_tracker.fetch_all_parts(sheet_id).items()
+                    if str(name).strip().lower() == code), [])
+    day = shipments_store.calendar_day(leg.get("date", ""))
+    event = str(leg.get("event", "")).strip().lower()
+    want_to = str(leg.get("to", "")).strip()
+    found = [row for row in history
+             if str(row.get("event", "")).strip().lower() == event
+             and day and shipments_store.calendar_day(row.get("date", "")) == day
+             and (not want_to or _same_name(row.get("to", ""), want_to))]
+    if not found:
+        return None
+    qty = to_int(leg.get("qty", ""))
+    exact = [row for row in found if to_int(row.get("qty_moved", "")) == qty]
+    return (exact or found)[0]
+
+
 def for_part(part_id: str, sheet_id: Optional[str] = None) -> List[Dict[str, str]]:
     """A part's movements, matched on the Part ID column — exactly, not by
     hunting for the code in free text. That guessing is what this column was
