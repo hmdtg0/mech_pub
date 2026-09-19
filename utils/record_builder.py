@@ -335,8 +335,11 @@ def _overview_row(mcode: str, part: dict, built_by: str, stamp: str) -> dict:
         stated = [str(r.get("qty_ordered", "")).strip() for r in history
                   if tracker_parse.to_int(r.get("qty_ordered", "")) > 0]
         row["qty_ordered"] = stated[-1] if stated else orders[-1].get("qty_ordered", "")
-        received = sum(tracker_parse.to_int(r.get("qty_received", ""))
-                       for r in history)
+        # ONE received rule for the whole app (19 Sep 2026): receive lines
+        # sum, only Correction/Update restate, a stray qty on any other
+        # event counts nowhere. The naive every-row sum here is what showed
+        # Joe "130 of 120" after a quantity landed in the wrong box.
+        received = tracker_orders.received_total(history)
         row["qty_received"] = str(received) if received else ""
     return row
 

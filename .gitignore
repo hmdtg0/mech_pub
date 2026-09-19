@@ -31,3 +31,4 @@ __pycache__/
 # they still live on `main` and in the private one.
 tools/
 
+tests_local/

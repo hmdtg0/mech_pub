@@ -140,8 +140,9 @@ def render_entry(user, mcode: str, record_id: str, project: str,
                    "record — the same ledger the board, Parts, Part Detail "
                    "and Movements read. A **Receipt** is the full receive: "
                    "it writes the paired receive line, counts the stock, "
-                   "and marks the order DELIVERED — quantity and vendor "
-                   "default from the order when left blank."
+                   "and marks the order DELIVERED once everything ordered "
+                   "has arrived — a partial receipt keeps it open. Quantity "
+                   "and vendor default from the order when left blank."
                    % (mcode or "the part"))
         # The whole vocabulary, straight from the event table — not a second
         # list typed out here (19 Aug: the old hardcoded pair got out of
@@ -280,12 +281,25 @@ def render_entry(user, mcode: str, record_id: str, project: str,
                     stock_note = ("" if res.get("ok") else
                                   " The stock count was NOT updated: %s"
                                   % res.get("problem", "unknown error"))
+                parts_tracker.refresh(record_id)
                 if client:
-                    updates = {"Status": "delivered"}
+                    # Delivered only when delivered IN FULL (19 Sep 2026):
+                    # a partial receipt keeps the order open, so the
+                    # outstanding balance stays visible everywhere. The
+                    # fresh ledger decides — the same received_total rule
+                    # every reader uses.
+                    updates = {}
                     if h_courier.strip():
                         updates["TrackingNum"] = h_courier.strip()
-                    update_order(client, order_id, updates)
-                parts_tracker.refresh(record_id)
+                    _hist = parts_tracker.fetch_all_parts(record_id).get(
+                        mcode, {}).get("history", [])
+                    _ordered_q, _received_q = tracker_orders.order_progress(
+                        _hist, order_id)
+                    if _received_q and (_received_q >= _ordered_q
+                                        or _ordered_q == 0):
+                        updates["Status"] = "delivered"
+                    if updates:
+                        update_order(client, order_id, updates)
                 # The Overview is derived — recompute it so the receipt
                 # shows everywhere immediately, not only on the part tab.
                 ov = record_builder.write_overview(

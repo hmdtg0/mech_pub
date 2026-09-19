@@ -84,9 +84,14 @@ def derived_status(history) -> str:
     if origin_idx is None:
         return "new" if history else ""
     after = history[origin_idx:]
-    if any(tracker_parse.event_of(r).lower()
-           == tracker_parse.EVENT_ORDER.lower()
-           and to_int(r.get("qty_received", "")) > 0 for r in after):
+    # Delivered means DELIVERED IN FULL (19 Sep 2026, wave 2): received has
+    # to reach the ordered quantity, so a partial delivery keeps the order
+    # open and Joe's split shipments stop closing it early. When the ledger
+    # never states an ordered qty, any receive still counts as delivered —
+    # there is nothing to measure fullness against.
+    _received = _received_total(after)
+    _ordered = _latest_qty(after, "qty_ordered")
+    if _received and (_received >= _ordered or _ordered == 0):
         return "delivered"
     if any(tracker_parse.event_of(r).lower() == "cancelled" for r in after):
         return "cancelled"
@@ -154,7 +159,14 @@ def _received_total(rows: List[dict]) -> int:
     """Deliveries accumulate: receive lines (Order/Receipt events with a
     received qty) each carry their own batch, as the app's receive flow
     writes them. A Correction/Update line stating a positive received total
-    restates it outright — the last one to do so wins over the sum."""
+    restates it outright — the last one to do so wins over the sum.
+
+    ONLY Correction/Update restate (19 Sep 2026). Before this, ANY other
+    event's qty_received restated the total, so a quantity typed into the
+    wrong box — Joe's 15 Sep Shipping line carried "10" in Qty received —
+    silently became the order's whole received figure. A stray qty on a
+    non-receipt, non-restate event now counts NOWHERE.
+    """
     order_ev = tracker_parse.EVENT_ORDER.lower()
     receipt_ev = tracker_parse.EVENT_RECEIPT.lower()
     total = 0
@@ -163,11 +175,33 @@ def _received_total(rows: List[dict]) -> int:
         n = to_int(row.get("qty_received", ""))
         if n <= 0:
             continue
-        if tracker_parse.event_of(row).lower() in (order_ev, receipt_ev):
+        event = tracker_parse.event_of(row).lower()
+        if event in (order_ev, receipt_ev):
             total += n
-        else:
+        elif event in ("correction", "update"):
             restated = n
     return total if restated is None else restated
+
+
+def received_total(history: List[dict]) -> int:
+    """The public face of the rule above — the ONE received figure every
+    reader shows (the Overview builder included), so two pages can never
+    disagree about how much of an order has arrived."""
+    return _received_total(history)
+
+
+def order_progress(history: List[dict], order_id: str):
+    """(ordered, received) for ONE order thread — the Receipt hint and the
+    outstanding-quantity prefill. Falls back to the whole ledger when the
+    id doesn't group (pre-id history has no thread to point at)."""
+    oid = str(order_id or "").strip()
+    if oid:
+        for group in _grouped_orders(history):
+            if str(group.get("id", "")).strip() == oid:
+                rows = group["rows"]
+                return (_latest_qty(rows, "qty_ordered"),
+                        _received_total(rows))
+    return _latest_qty(history, "qty_ordered"), _received_total(history)
 
 
 def _grouped_orders(history: List[dict]) -> List[dict]:
@@ -220,7 +254,11 @@ def _order_from_group(group: dict) -> Optional[dict]:
 
     last_receipt = receipts[-1] if receipts else {}
     holders = [h for h in (tracker_parse.holder_of(r) for r in rows) if h]
-    if received:
+    # Same full-delivery rule as derived_status (19 Sep 2026): a partial
+    # receipt keeps the thread open; cancelling after a partial receipt
+    # derives cancelled rather than delivered.
+    _ordered_qty = _latest_qty(rows, "qty_ordered")
+    if received and (received >= _ordered_qty or _ordered_qty == 0):
         derived = "delivered"
     elif any(tracker_parse.event_of(r).lower() == "cancelled" for r in rows):
         derived = "cancelled"
