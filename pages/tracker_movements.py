@@ -104,10 +104,42 @@ sheet_logs = {name: parts_tracker.fetch_movements(sid)
               for name, sid in sources}
 _sheet_total = sum(len(rows) for rows in sheet_logs.values())
 
-tab_log, tab_sheet = st.tabs([
+# The MACHINE log too (19 Sep 2026): the merged Movements tab is what
+# record_movement writes and the stock count reads, and this page never
+# showed it — so a count-only row (like Joe's orphaned 17 Sep entry, whose
+# history half was hand-deleted from the sheet) was invisible everywhere
+# in the app. Now the counted rows can always be checked against the
+# ledger stream beside them.
+from utils import movements_store as _mv
+_machine = []
+for _name, _sid in sources:
+    for _m in _mv.fetch(_sid):
+        _machine.append((_name, _m))
+_machine.reverse()   # appended chronologically — newest first here
+
+tab_log, tab_machine, tab_sheet = st.tabs([
     "📜 Log (%d)" % len(log),
+    "⚙ Counted movements (%d)" % len(_machine),
     "🗒️ Movement Log tab (%d)" % _sheet_total,
 ])
+
+with tab_machine:
+    st.caption("The merged **Movements** tab — every row the stock count "
+               "is built from, newest first. A row here without its twin "
+               "in 📜 Log means the count and the ledger have drifted "
+               "(a hand-deleted history line, or a legacy write).")
+    native_table(
+        ["Project", "Part", "Event", "Date", "Qty", "From", "To",
+         "Courier / Tracking", "Build", "Logged by", "Logged at", "Notes",
+         "Flag"],
+        [[_n, str(_m.get("part_id", "")),
+          str(_m.get("event", "")), str(_m.get("date", "")),
+          str(_m.get("qty", "")),
+          str(_m.get("from", "")), str(_m.get("to", "")),
+          str(_m.get("courier", "")), str(_m.get("build", "")),
+          user_store.name_of(_m.get("logged_by", "")),
+          str(_m.get("logged_at", "")), str(_m.get("notes", "")),
+          str(_m.get("flag", ""))] for _n, _m in _machine])
 
 with tab_log:
     st.markdown("**%d updates** shown · %d app-stamped, newest first · "

@@ -19,13 +19,6 @@ from utils.message_store import fetch_messages_for_order, send_message
 from config import ORDER_STATUSES, STATUS_COLORS, CNY_TO_GBP
 
 
-STATUS_ACTIONS = {
-    # "processing" left the ladder 28 Aug — an order is new until ordered.
-    "new": ("📦 Mark as Ordered", "ordered"),
-    "ordered": ("🚚 Mark as Shipped", "shipped"),
-    "shipped": ("✅ Mark as Delivered", "delivered"),
-}
-
 _CLOSED = ("delivered", "cancelled")
 
 
@@ -216,27 +209,14 @@ def order_card(order_id: str, user_name: str, progress: str = "",
             send_message(client, order_id, user_name, new_msg.strip())
             st.rerun(scope="fragment")
 
-        # --- Status action buttons (single-click, outside forms) ---
-        st.markdown("**Actions:**")
-        btn_col2, btn_col3 = st.columns(2)
-
-        if status in STATUS_ACTIONS:
-            label, next_status = STATUS_ACTIONS[status]
-            with btn_col2:
-                if st.button(label, key=f"advance_{order_id}"):
-                    if client:
-                        update_order(client, order_id, {"Status": next_status})
-                        # Status changed -> full rerun (card moves bucket, metrics update)
-                        st.rerun()
-
-        if status != "new":
-            status_idx = ORDER_STATUSES.index(status) if status in ORDER_STATUSES else 0
-            prev_status = ORDER_STATUSES[status_idx - 1]
-            with btn_col3:
-                if st.button(f"↩ Revert to {prev_status}", key=f"revert_{order_id}"):
-                    if client:
-                        update_order(client, order_id, {"Status": prev_status})
-                        st.rerun()
+        # The Mark-as-Ordered/Shipped/Delivered and Revert buttons lived
+        # here until 19 Sep 2026 (Hamid, 28 Aug decision: "remove in this
+        # wave"). Entries are the only thing that moves a status now — a
+        # Shipping entry IS what makes it shipped, a full Receipt is what
+        # delivers, an admin Update restating received re-opens. Hand-set
+        # cells fought the ledger and lost anyway (effective_status).
+        st.caption("Status follows the entries — record one on **Process "
+                   "Order** (or the part's page): 📜 Add history entry.")
 
 
 def history_card(order: dict, progress: str = "",
