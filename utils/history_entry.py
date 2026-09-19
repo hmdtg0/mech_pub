@@ -149,6 +149,13 @@ def render_entry(user, mcode: str, record_id: str, project: str,
     if _f:
         {"success": st.success, "warning": st.warning,
          "error": st.error}.get(_f[0], st.info)(_f[1])
+        # Mirrored as a toast too (19 Sep user test: confirmations rendered
+        # below long pages went unseen and users re-submitted). Fired on the
+        # RENDER run, so the rerun cannot tear it down.
+        try:
+            st.toast(_f[1])
+        except Exception:
+            pass
 
     st.subheader("📜 Add history entry")
 
@@ -179,9 +186,26 @@ def render_entry(user, mcode: str, record_id: str, project: str,
                      "or Costs needs to know which.")
             order = _labels.get(_sel)
         else:
-            st.caption("No open order on this part — entries are recorded "
-                       "part-level. A **Receipt** or **Costs** needs an "
-                       "open order (raise one on **Order from BOM**).")
+            # No OPEN order: fall back to the LATEST one (19 Sep user test,
+            # bug 1). Without this, an admin restate on a delivered order
+            # wrote a part-level row with a BLANK order id and no cell
+            # write-back — the order could never re-open, and outstanding
+            # goods could never be booked in again.
+            _closed = sorted(_cands,
+                             key=lambda o: str(o.get("CreatedAt", "")))
+            if _closed:
+                order = _closed[-1]
+                _cell = (str(order.get("Status", "")).strip().lower()
+                         or "new")
+                st.caption("No open order — entries land on the latest "
+                           "one, **%s** (%s). A **Receipt** books more "
+                           "goods against it; an admin **Update** "
+                           "restating the received total re-opens it."
+                           % (order.get("OrderID", "?"), _cell))
+            else:
+                st.caption("No order for this part yet — entries are "
+                           "recorded part-level. Raise one on **Order "
+                           "from BOM** for a Receipt or Costs.")
     order_id = str(order.get("OrderID", "")).strip() if order else ""
 
     # ------------------------------------------------------------------
@@ -235,7 +259,7 @@ def render_entry(user, mcode: str, record_id: str, project: str,
 
     if verb == "more":
         _more = [("Return", "↩ Return")]
-        if order:
+        if order and str(order.get("Status", "")).strip().lower() != "cancelled":
             _more.append(("Cancelled", "🚫 Cancel order"))
         _mpick = st.radio("More", [m[1] for m in _more], horizontal=True,
                           key="he_more_%s" % ns, label_visibility="collapsed")
@@ -264,7 +288,7 @@ def render_entry(user, mcode: str, record_id: str, project: str,
     def _generic_write(event, date, h_from="", h_to="", qty_ordered="",
                        qty_moved="", qty_received="", courier="", eta="",
                        qc="", build="", lead="", notes="", selected=False,
-                       count=True):
+                       count=True, after_write=None):
         """Append the ledger line; count it when the event moves stock."""
         now = datetime.now()
         ok, message = tracker_writer.append_history(mcode, {
@@ -300,6 +324,8 @@ def render_entry(user, mcode: str, record_id: str, project: str,
                           " — but the movement log and count were NOT "
                           "updated: %s" % res.get("problem", "unknown"))
         _after_ledger_write()
+        if after_write:
+            after_write()
         flash(ns, "warning" if "NOT" in stock_note else "success",
               message + stock_note)
         st.rerun()
@@ -413,6 +439,7 @@ def render_entry(user, mcode: str, record_id: str, project: str,
                     updates["Status"] = "delivered"
                 if updates:
                     update_order(client, order_id, updates)
+                    st.session_state.pop("ofb_working", None)
             ov = record_builder.write_overview(
                 project, user.get("email", "") or user.get("name", ""),
                 sheet_id=record_id, replace=True)
@@ -665,11 +692,24 @@ def render_entry(user, mcode: str, record_id: str, project: str,
                     st.error("An empty note records nothing — write "
                              "something, or fill one of the fields.")
                     st.stop()
+                def _sync_restate():
+                    if not (_restate.strip() and order and client):
+                        return
+                    _hist = parts_tracker.fetch_all_parts(record_id).get(
+                        mcode, {}).get("history", [])
+                    _o_q, _r_q = tracker_orders.order_progress(
+                        _hist, order_id)
+                    _new = ("delivered"
+                            if _r_q and (_r_q >= _o_q or _o_q == 0)
+                            else "ordered")
+                    update_order(client, order_id, {"Status": _new})
+                    st.session_state.pop("ofb_working", None)
                 _generic_write("Update", _date,
                                qty_received=_restate.strip(),
                                eta=_eta.strftime("%d %b %Y") if _eta
                                else "", build=_build, lead=_lead,
-                               notes=_notes, selected=_selected)
+                               notes=_notes, selected=_selected,
+                               after_write=_sync_restate)
 
     # === ↩ Return ========================================================
     elif verb == "return":
@@ -730,6 +770,7 @@ def render_entry(user, mcode: str, record_id: str, project: str,
                 st.stop()
             if client:
                 update_order(client, order_id, {"Status": "cancelled"})
+                st.session_state.pop("ofb_working", None)
             _generic_write("Cancelled", _date, notes=_notes, count=False)
 
     # === 💰 Costs ========================================================
