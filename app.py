@@ -87,11 +87,28 @@ work_pages = [
     # The landing page — named "All Orders" (Hamid, 28 Aug), one screen with
     # a Board/Orders switch: the board that answers "where does everything
     # stand" plus the orders desk. The merge and the name both serve "less
-    # pages to track". The FILE stays admin_overview.py so the URL and the
-    # tier-1 revert path (git revert 524004c) stay stable.
-    st.Page("pages/admin_overview.py", title="All Orders", icon="📊", default=True),
+    # pages to track". The FILE stays admin_overview.py so the tier-1 revert
+    # path stays stable. Its url_path is set only to FREE the inferred
+    # "admin_overview" for the old-link entry below — a default page always
+    # serves at "/" whatever its url_path says.
+    st.Page("pages/admin_overview.py", title="All Orders", icon="📊",
+            default=True, url_path="all_orders"),
     st.Page("pages/admin_process_order.py", title="Process Order", icon="🔧"),
 ]
+_home_page = work_pages[0]
+
+
+def _old_overview_link():
+    """/admin_overview was this page's address until it became the landing
+    page (28 Aug); bookmarks from before got "Page not found" first. A page
+    the nav does not register cannot be reached at all, so the old address
+    is a registered entry that does nothing but go home — hidden from the
+    page list by the CSS below."""
+    st.switch_page(_home_page)
+
+
+work_pages.append(st.Page(_old_overview_link, title="All Orders (old link)",
+                          icon="📊", url_path="admin_overview"))
 
 if is_admin(user):
     # Admin-only: these rebuild the Overview, create tabs, and decide who can
@@ -141,6 +158,9 @@ pg = st.navigation(pages)
 st.markdown("""<style>
 [data-testid="stSidebarNav"] ul { max-height: none !important; }
 [data-testid="stSidebarNavViewButton"] { display: none !important; }
+/* The old /admin_overview address is a registered page only so bookmarks
+   reach it (see _old_overview_link); it is not a place to go from the list. */
+[data-testid="stSidebarNav"] li:has(a[href$="/admin_overview"]) { display: none !important; }
 /* Streamlit renders its page list ABOVE any custom sidebar content, which
    put the one control that decides what every page shows below nineteen
    links. The three sidebar regions each carry a stable data-testid, so the
