@@ -26,8 +26,10 @@ from utils import (holders_store, movements_store, parts_tracker,
                    tracker_writer, ui)
 from utils.auth import is_admin
 from utils.google_client import get_gspread_client
-from utils.orders_store import fetch_orders_for_part, update_order
-from utils.tracker_parse import holder_of, is_selected, place_of, to_int
+from utils.orders_store import (fetch_all_orders,
+                                fetch_orders_for_part, update_order)
+from utils.tracker_parse import (display_event, holder_of,
+                                 is_selected, place_of, to_int)
 
 
 def _flash_key(ns: str) -> str:
@@ -56,7 +58,7 @@ def history_table(mcode: str, record_id: str) -> None:
          "Qty ordered", "Qty moved", "Qty received", "From", "To",
          "Vendor / Source", "ETA", "QC", "Courier / Tracking", "Selected",
          "Notes"],
-        [[r.get("date", ""), r.get("event", "") or r.get("type", ""),
+        [[r.get("date", ""), display_event(r),
           r.get("order_id", ""), r.get("version", ""), r.get("build", ""),
           r.get("qty_ordered", ""), r.get("qty_moved", ""),
           r.get("qty_received", ""), place_of(r), holder_of(r),
@@ -493,6 +495,26 @@ def render_entry(user, mcode: str, record_id: str, project: str,
                 if not _picked:
                     st.error("Nothing ticked — nothing ships.")
                     st.stop()
+                # Every batched part gets ITS OWN open order id stamped
+                # (19 Sep user test: only the anchor part carried one, so
+                # a batched part's open order never derived "shipped").
+                _b_derived = {}
+                for _t in tracker_orders.all_projects_orders():
+                    _boid = str(_t.get("order_id", "")).strip()
+                    if _boid:
+                        _b_derived[_boid] = _t.get("derived", "")
+                _open_of = {}
+                for _bo in fetch_all_orders():
+                    if str(_bo.get("Project", "")).strip() != project:
+                        continue
+                    _beff = tracker_orders.effective_status(
+                        (_bo.get("Status") or "new").strip() or "new",
+                        _b_derived.get(
+                            str(_bo.get("OrderID", "")).strip(), ""))
+                    if _beff not in ("delivered", "cancelled"):
+                        _open_of.setdefault(
+                            str(_bo.get("PartID", "")).strip(),
+                            str(_bo.get("OrderID", "")).strip())
                 _bad = [p for p, q in _picked
                         if q <= 0 or q > _their.get(p, 0)]
                 if _bad:
@@ -506,7 +528,8 @@ def render_entry(user, mcode: str, record_id: str, project: str,
                     ok, message = tracker_writer.append_history(_pm, {
                         "event": "Shipping",
                         "date": _date.strftime("%d %b %Y"),
-                        "order_id": order_id if _pm == mcode else "",
+                        "order_id": (order_id if _pm == mcode
+                                     else _open_of.get(_pm, "")),
                         "qty_moved": str(_q), "place": _from, "holder": _to,
                         "eta": _eta.strftime("%d %b %Y") if _eta else "",
                         "courier": _courier.strip(), "selected": "FALSE",

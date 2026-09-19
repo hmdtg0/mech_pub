@@ -95,8 +95,10 @@ if selected:
     if selected.get("notes"):
         st.info(selected["notes"])
 else:
-    st.warning("No row on this part's tab is flagged **Selected for MP** — "
-               "the Overview rollup will be blank for this part.")
+    # A caption, not a warning (19 Sep user test): the permanent banner
+    # sat above the entry confirmations and buried them.
+    st.caption("⚠ No row is flagged **Selected for MP** — the Overview "
+               "rollup stays blank for this part.")
 
 # --- Every iteration this part has been through ---
 # ONE table shape with Process Order since 28 Aug (Hamid: "I want to unify

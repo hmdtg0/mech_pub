@@ -73,6 +73,18 @@ PART_FIELDS = {
 # Events the ledger records. An order is two rows: Order then Receipt.
 EVENT_ORDER = "Order"
 EVENT_RECEIPT = "Receipt"
+
+
+def display_event(row) -> str:
+    """The event as a READER should see it. The ledger writes a receive
+    as a second `Order` row (the pair convention), which scans as a raise
+    to anyone reading a log — show it as Receipt (19 Sep 2026, Joe's and
+    the test agent's confusion). Writers keep writing `Order`."""
+    ev = event_of(row)
+    if (ev.lower() == EVENT_ORDER.lower()
+            and to_int(row.get("qty_received", "")) > 0):
+        return EVENT_RECEIPT
+    return ev
 EVENT_MOVEMENT = "Movement"
 
 MOVEMENT_FIELDS = {

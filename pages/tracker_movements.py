@@ -21,7 +21,7 @@ import streamlit as st
 from utils.auth import require_auth
 from utils import (overview_board, parts_tracker, project_colors,
                    project_registry, user_store)
-from utils.tracker_parse import event_of
+from utils.tracker_parse import display_event, event_of
 from utils.ui import (movement_header, native_table, part_url,
                       render_movement, require_project)
 
@@ -123,6 +123,18 @@ tab_log, tab_machine, tab_sheet = st.tabs([
     "🗒️ Movement Log tab (%d)" % _sheet_total,
 ])
 
+def _short_date(s):
+    """One date shape in the machine tab - USER_ENTERED writes let the
+    sheet reformat a cell to its locale ("19 September 2026"), which then
+    reads back long (19 Sep user test, cosmetic finding)."""
+    for fmt in ("%d %B %Y", "%d %b %Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(str(s).strip(), fmt).strftime("%d %b %Y")
+        except ValueError:
+            continue
+    return str(s)
+
+
 with tab_machine:
     st.caption("The merged **Movements** tab — every row the stock count "
                "is built from, newest first. A row here without its twin "
@@ -133,7 +145,7 @@ with tab_machine:
          "Courier / Tracking", "Build", "Logged by", "Logged at", "Notes",
          "Flag"],
         [[_n, str(_m.get("part_id", "")),
-          str(_m.get("event", "")), str(_m.get("date", "")),
+          str(_m.get("event", "")), _short_date(_m.get("date", "")),
           str(_m.get("qty", "")),
           str(_m.get("from", "")), str(_m.get("to", "")),
           str(_m.get("courier", "")), str(_m.get("build", "")),
@@ -153,7 +165,7 @@ with tab_log:
         _cells.append([
             e["_project"],
             part_url(e["_project"], e["_mcode"]),
-            event_of(e),
+            display_event(e),
             e.get("date", ""),
             e.get("qty_ordered", ""),
             e.get("qty_moved", ""),

@@ -144,7 +144,15 @@ def order_facts(o):
 
 status_icons = {"new": "⚪", "ordered": "🟠",
                 "shipped": "🟣", "delivered": "🟢", "cancelled": "🚫"}
-selected_order_id = None
+
+
+def _select_order(oid: str) -> None:
+    """Open's on_click. A callback runs BEFORE the script body, so ONE
+    click opens the order (19 Sep user test: the old button-return
+    pattern needed two, and the selection could drop on a dialog
+    dismiss)."""
+    st.session_state["process_order_id"] = oid
+
 
 
 # One stable colour per Type across all three tabs.
@@ -152,11 +160,10 @@ _all_types = sorted({str(o.get("Process", "") or "—") for o in orders})
 
 
 def render_orders(order_list, key_prefix):
-    """The grouped order list; returns the OrderID whose Open was clicked."""
+    """The grouped order list; Open selects via _select_order."""
     if not order_list:
         st.info("Nothing here.")
-        return None
-    selected = None
+        return
     groups = {}
     for o in order_list:
         groups.setdefault(str(o.get("Process", "") or "—"), []).append(o)
@@ -196,9 +203,8 @@ def render_orders(order_list, key_prefix):
             with cols[4]:
                 st.markdown(f"ETA: {eta or eta_hist or '-'}")
             with cols[5]:
-                if st.button("Open", key=f"open_{key_prefix}_{oid}"):
-                    selected = oid
-    return selected
+                st.button("Open", key=f"open_{key_prefix}_{oid}",
+                          on_click=_select_order, args=(oid,))
 
 
 # --- Three views: active / delivered / everything submitted ---
@@ -216,15 +222,11 @@ tab_active, tab_done, tab_all = st.tabs([
     "📋 All orders (%d)" % len(orders),
 ])
 with tab_active:
-    selected_order_id = render_orders(_active, "act") or selected_order_id
+    render_orders(_active, "act")
 with tab_done:
-    selected_order_id = render_orders(_delivered, "done") or selected_order_id
+    render_orders(_delivered, "done")
 with tab_all:
-    selected_order_id = render_orders(orders, "all") or selected_order_id
-
-# Check session state for selected order
-if selected_order_id:
-    st.session_state["process_order_id"] = selected_order_id
+    render_orders(orders, "all")
 
 sel_id = st.session_state.get("process_order_id")
 if not sel_id:
