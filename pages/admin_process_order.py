@@ -206,9 +206,15 @@ def render_orders(order_list, key_prefix):
                 row.insert(0, (o.get("Project") or "").strip())
             _cells.append(row)
             _bg.append(_paint_by.get(effective, "#ffffff"))
+        # The epoch remounts the grids with CLEAN ticks after a close:
+        # popping the backend state alone leaves the component's own
+        # drawn tick behind (glide keeps client-side selection until
+        # the key changes).
         picked = ui.native_table(
             _heads, _cells, _bg, link_col="M-Code",
-            select_key="po_sel_%s_%s" % (key_prefix, type_name))
+            select_key="po_sel_%s_%s_%d" % (
+                key_prefix, type_name,
+                st.session_state.get("po_tick_epoch", 0)))
         if picked is not None:
             st.session_state["process_order_id"] = \
                 groups[type_name][picked].get("OrderID", "")
@@ -253,11 +259,15 @@ if not order:
 st.markdown("---")
 if st.button("⬆ Close Details", key="collapse_btn"):
     del st.session_state["process_order_id"]
-    # Ask the NEXT run to drop the grids' tick state too — popped up top,
-    # before the grids instantiate (the OFB pending-reset idiom). A
-    # lingering tick on a closed order would need un-ticking before that
-    # row could re-open, and the change-only return in ui.native_table
-    # never re-fires a held tick.
+    # Give the grids CLEAN ticks: the epoch bump renames every grid's
+    # select_key, remounting the component (the only thing that clears
+    # its drawn tick), and the flag asks the NEXT run to pop the old
+    # keys' state up top, before the grids instantiate (the OFB
+    # pending-reset idiom). A lingering tick on a closed order would
+    # need un-ticking before that row could re-open — the change-only
+    # return in ui.native_table never re-fires a held tick.
+    st.session_state["po_tick_epoch"] = \
+        st.session_state.get("po_tick_epoch", 0) + 1
     st.session_state["po_clear_ticks"] = True
     st.rerun()
 
