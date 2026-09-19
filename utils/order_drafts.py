@@ -46,20 +46,44 @@ def _rows() -> List[List[str]]:
     return values[1:] if values else []
 
 
+def _stamp_of(text) -> datetime:
+    """A Saved-At cell as a datetime — unparseable stamps sort oldest, so
+    any properly stamped block outranks them."""
+    try:
+        return datetime.strptime(str(text).strip(), "%d %b %Y %H:%M")
+    except ValueError:
+        return datetime.min
+
+
 def list_drafts(project: str) -> Dict[str, dict]:
     """{draft name: {saved_by, saved_at, units, build, lines}} for a project.
 
     Read fresh every time, no cache: a draft exists to be picked up by a
     DIFFERENT person minutes later, and a cached empty list is a hand-off
     that looks lost.
+
+    The NEWEST Saved-At block wins per name (19 Sep 2026): a lost race
+    between two surgical saves can leave both versions' rows on the tab,
+    and merging them would double a draft's lines. The older block is
+    ignored here and cleaned up by the next save or delete of that name.
     """
-    out: Dict[str, dict] = {}
+    rows = []
     for row in _rows():
         row = list(row) + [""] * (len(HEADERS) - len(row))
         if str(row[0]).strip() != str(project).strip():
             continue
+        if str(row[1]).strip():
+            rows.append(row)
+    newest: Dict[str, datetime] = {}
+    for row in rows:
         name = str(row[1]).strip()
-        if not name:
+        when = _stamp_of(row[3])
+        if name not in newest or when > newest[name]:
+            newest[name] = when
+    out: Dict[str, dict] = {}
+    for row in rows:
+        name = str(row[1]).strip()
+        if _stamp_of(row[3]) != newest[name]:
             continue
         draft = out.setdefault(name, {
             "saved_by": row[2], "saved_at": row[3],
@@ -99,14 +123,40 @@ def all_drafts_cached() -> List[dict]:
     return data_cache.get(_SUMMARY_KEY, 60.0, all_drafts)
 
 
+def _matching_sheet_rows(rows, project: str, name: str) -> List[int]:
+    """1-based SHEET row numbers of a draft's lines (data starts at row 2)."""
+    return [i + 2 for i, r in enumerate(rows)
+            if str(r[0]).strip() == str(project).strip()
+            and len(r) > 1 and str(r[1]).strip() == str(name).strip()]
+
+
+def _delete_sheet_rows(ws, sheet_rows: List[int]) -> None:
+    """Delete 1-based sheet rows bottom-up, in contiguous runs — later
+    deletions never shift the rows still waiting to be deleted."""
+    if not sheet_rows:
+        return
+    todo = sorted(set(sheet_rows), reverse=True)
+    run_end = run_start = todo[0]
+    for r in todo[1:]:
+        if r == run_start - 1:
+            run_start = r
+            continue
+        ws.delete_rows(run_start, run_end)
+        run_end = run_start = r
+    ws.delete_rows(run_start, run_end)
+
+
 def save_draft(project: str, name: str, saved_by: str, units, build: str,
                lines: List[dict]) -> str:
     """Write a draft, replacing any same-named one for this project.
 
-    Returns "" on success, else the reason. Whole-tab rewrite rather than
-    surgical deletes: the tab is small, and half-replaced drafts (old rows
-    surviving under a new save) are worse than a rare lost race on a tab two
-    people touch a few times a week.
+    Returns "" on success, else the reason. SURGICAL since 19 Sep 2026:
+    delete only the draft's own rows, then append — never clear the tab.
+    The old read→clear→rewrite let two concurrent writers silently drop
+    each other's drafts; "a few times a week" became routine once the
+    ~25 s autosave landed. A race can now at worst leave BOTH versions'
+    rows, and list_drafts keeps the newest Saved-At block per name, so
+    the loser is invisible and harmless.
     """
     from utils.auth import impersonation_block
 
@@ -120,9 +170,7 @@ def save_draft(project: str, name: str, saved_by: str, units, build: str,
         return "Nothing to save — no parts are selected."
 
     stamp = datetime.now().strftime("%d %b %Y %H:%M")
-    keep = [r for r in _rows()
-            if not (str(r[0]).strip() == str(project).strip()
-                    and len(r) > 1 and str(r[1]).strip() == name)]
+    old_rows = _matching_sheet_rows(_rows(), project, name)
     new = [[str(project), name, saved_by, stamp, str(units), str(build or ""),
             str(l.get("part", "")), str(l.get("qty", "")),
             str(l.get("recipient", "")), str(l.get("eta", "")),
@@ -130,8 +178,8 @@ def save_draft(project: str, name: str, saved_by: str, units, build: str,
            for l in lines]
 
     def _write(ws):
-        ws.clear()
-        ws.update(values=[HEADERS] + keep + new, range_name="A1")
+        _delete_sheet_rows(ws, old_rows)
+        ws.append_rows(new, value_input_option="RAW")
         return True
 
     try:
@@ -144,19 +192,21 @@ def save_draft(project: str, name: str, saved_by: str, units, build: str,
 
 
 def delete_draft(project: str, name: str) -> str:
-    """Remove a draft. Returns "" on success, else the reason."""
+    """Remove a draft — surgically, its own rows only (19 Sep 2026).
+    Returns "" on success, else the reason."""
     from utils.auth import impersonation_block
 
     blocked = impersonation_block()
     if blocked:
         return blocked
-    keep = [r for r in _rows()
-            if not (str(r[0]).strip() == str(project).strip()
-                    and len(r) > 1 and str(r[1]).strip() == str(name).strip())]
+    old_rows = _matching_sheet_rows(_rows(), project, name)
+    if not old_rows:
+        from utils import data_cache
+        data_cache.invalidate(_SUMMARY_KEY)
+        return ""
 
     def _write(ws):
-        ws.clear()
-        ws.update(values=[HEADERS] + keep, range_name="A1")
+        _delete_sheet_rows(ws, old_rows)
         return True
 
     try:
