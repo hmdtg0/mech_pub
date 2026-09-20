@@ -27,10 +27,15 @@ from utils.orders_store import fetch_all_orders
 
 user = require_role("admin", "engineer", "logistics")
 
-st.title("📝 Record")
+st.title("📝 Record (beta)")
 project = ui.require_single_project("Record")
 record_id = project_registry.tracker_sheet(project)
 ui.project_scope("Everything recorded here is filed to this project.")
+# Live beside the current forms since 20 Sep (Hamid: "yes go with option 1")
+# — two ways to record the same shipment is the one real hazard of that, so
+# the page says so before anything else.
+st.info("**Trial page.** For any one shipment, use this page **or** the "
+        "Ship entry on Process Order — not both.")
 
 _flash = st.session_state.pop("rec_flash", None)
 if _flash:
