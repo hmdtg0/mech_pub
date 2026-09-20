@@ -94,6 +94,10 @@ work_pages = [
     st.Page("pages/admin_overview.py", title="All Orders", icon="📊",
             default=True, url_path="all_orders"),
     st.Page("pages/admin_process_order.py", title="Process Order", icon="🔧"),
+    # The branch experiment (Hamid, 19 Sep): ONE screen to record from —
+    # Move parts / Add a note — tried BESIDE the current entry forms, on
+    # the same data, before anything is retired.
+    st.Page("pages/record.py", title="Record", icon="📝"),
 ]
 _home_page = work_pages[0]
 
