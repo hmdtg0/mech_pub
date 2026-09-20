@@ -71,10 +71,21 @@ def plan(kind: str, lines: List[dict], from_name: str, to_name: str,
          note: str = "") -> Tuple[List[dict], List[str]]:
     """(effects, problems) for the entry as it stands — nothing is written.
 
-    `lines`: [{"part", "qty", "order_id"?}]. `holdings`: {(part, holder):
-    qty}. `open_orders`: {part: [{"id", "ordered", "received"}]}. Every
-    problem is a sentence someone can act on; an empty list means the
-    entry can be recorded.
+    `lines`: [{"part", "qty", "order_id"?, "arriving"?, "can_arrive"?}].
+    `holdings`: {(part, holder): qty}. `open_orders`: {part: [{"id",
+    "ordered", "received"}]}. Every problem is a sentence someone can act
+    on; an empty list means the entry can be recorded.
+
+    `arriving` is the ONE thing From and To cannot say (Hamid, 20 Sep:
+    "good point, yes"). No order names its vendor, so goods a stock-holding
+    vendor MADE — an assembly from the factory — look exactly like that
+    vendor handing over stock, and would be refused: they hold none. The
+    person says so with a tick, per line, and that line becomes goods
+    arriving against the part's order. Never inferred: a holder with none
+    of a part is just as often a count that is behind (the sandbox's first
+    shipment was exactly that), and guessing "arrival" would book goods to
+    the wrong place. `can_arrive` marks a line the tick is offered on, so
+    the refusal can point at it.
     """
     problems: List[str] = []
     effects: List[dict] = []
@@ -97,21 +108,30 @@ def plan(kind: str, lines: List[dict], from_name: str, to_name: str,
         part = str(line.get("part", "")).strip()
         qty = to_qty(line.get("qty"))
         effect = {"part": part, "qty": qty, "order": None, "problem": ""}
+        line_kind = line_kind_of(kind, line)
+        effect["arriving"] = line_kind == "receipt" and kind != "receipt"
         if qty <= 0:
             effect["problem"] = ("How many %s? Give a number above zero."
                                  % part)
-        if kind in ("move", "scrap", "return"):
+        if line_kind in ("move", "scrap", "return"):
             have = int(holdings.get((part, from_name), 0))
             effect["from_before"], effect["from_after"] = have, have - qty
-            if kind == "move":
+            if line_kind == "move":
                 there = int(holdings.get((part, to_name), 0))
                 effect["to_before"], effect["to_after"] = there, there + qty
             if qty > have and not effect["problem"]:
-                effect["problem"] = (
-                    "%s holds %d of %s — %d cannot leave. If the count is "
-                    "behind, record the arrival first."
-                    % (from_name, have, part, qty))
-        elif kind == "receipt":
+                if have == 0 and line.get("can_arrive"):
+                    effect["problem"] = (
+                        "%s holds none of %s. If %s made these and they are "
+                        "arriving against its order, tick “arriving on the "
+                        "order”. If the count is just behind, record the "
+                        "arrival first." % (from_name, part, from_name))
+                else:
+                    effect["problem"] = (
+                        "%s holds %d of %s — %d cannot leave. If the count "
+                        "is behind, record the arrival first."
+                        % (from_name, have, part, qty))
+        elif line_kind == "receipt":
             there = int(holdings.get((part, to_name), 0))
             effect["to_before"], effect["to_after"] = there, there + qty
             candidates = open_orders.get(part, [])
@@ -138,6 +158,13 @@ def plan(kind: str, lines: List[dict], from_name: str, to_name: str,
             problems.append(effect["problem"])
         effects.append(effect)
     return effects, problems
+
+
+def line_kind_of(kind: str, line: dict) -> str:
+    """What ONE line is. The entry's kind, except that a line of a move
+    ticked as arriving is goods arriving — so one box can carry both the
+    assemblies a vendor made and the spare screws it merely held."""
+    return "receipt" if kind == "move" and line.get("arriving") else kind
 
 
 def resolve_orders(lines: List[dict],
@@ -232,7 +259,11 @@ def commit(kind: str, lines: List[dict], from_name: str, to_name: str, *,
         part, qty = str(line["part"]).strip(), to_qty(line.get("qty"))
         ident = names.get(part, {})
         order = orders_by_id.get(str(line.get("order_id", "") or "").strip())
-        if kind == "receipt" and order is not None:
+        # What THIS line is — never reassign `kind`: an early `continue`
+        # would carry one line's answer into the next.
+        lk = line_kind_of(kind, line)
+        event = "Receipt" if lk == "receipt" else EVENT_OF[lk]
+        if lk == "receipt" and order is not None:
             ok, message = tracker_writer.write_receipt(
                 part, order_id=str(order.get("OrderID", "")).strip(),
                 qty_ordered=str(order.get("Quantity", "")),
@@ -243,30 +274,26 @@ def commit(kind: str, lines: List[dict], from_name: str, to_name: str, *,
                 logged_at=logged_at, sheet_id=record_id)
         else:
             fields = {
-                "event": ("Receipt" if kind == "receipt"
-                          else EVENT_OF[kind]),
-                "date": day, "order_id": "", "place": from_name,
-                "holder": "" if kind == "scrap" else to_name,
+                "event": event, "date": day, "order_id": "",
+                "place": from_name,
+                "holder": "" if lk == "scrap" else to_name,
                 "courier": tracking, "selected": "FALSE",
                 "logged_by": who, "logged_at": logged_at, "notes": note,
+                "type": event,
             }
-            fields["qty_received" if kind == "receipt"
+            fields["qty_received" if lk == "receipt"
                    else "qty_moved"] = str(qty)
-            fields["type"] = fields["event"]
             ok, message = tracker_writer.append_history(
                 part, fields, sheet_id=record_id)
         if not ok:
             failed.append("%s: %s" % (part, message))
             continue
         res = stock_store.record_movement(
-            part, project, qty, "" if kind == "scrap" else to_name,
-            from_name,
-            event="Receipt" if kind == "receipt" else EVENT_OF[kind],
-            description=ident.get("part_name", ""),
+            part, project, qty, "" if lk == "scrap" else to_name, from_name,
+            event=event, description=ident.get("part_name", ""),
             part_type=ident.get("category", ""), notes=note,
             courier=tracking,
-            build=(order or {}).get("Version", "") if kind == "receipt"
-            else "",
+            build=(order or {}).get("Version", "") if lk == "receipt" else "",
             date=day, logged_by=who)
         if res.get("ok"):
             done.append(part)
@@ -275,7 +302,7 @@ def commit(kind: str, lines: List[dict], from_name: str, to_name: str, *,
                           % (part, res.get("problem", "unknown")))
 
     parts_tracker.refresh(record_id)
-    if kind == "receipt":
+    if any(line_kind_of(kind, line) == "receipt" for line in lines):
         # The same write-back Process Order makes: delivered only when
         # delivered IN FULL; the tracking number rides along.
         client = get_gspread_client()
@@ -283,7 +310,8 @@ def commit(kind: str, lines: List[dict], from_name: str, to_name: str, *,
         for line in lines:
             order = orders_by_id.get(
                 str(line.get("order_id", "") or "").strip())
-            if order is None or client is None:
+            if (order is None or client is None
+                    or line_kind_of(kind, line) != "receipt"):
                 continue
             oid = str(order.get("OrderID", "")).strip()
             history = fresh.get(str(line["part"]).strip(), {}).get(

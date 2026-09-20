@@ -129,13 +129,28 @@ if mode == "Move parts":
     # What can be picked depends on who is sending: a holder sends what
     # they hold; a supplier sends what is on order (anything else is still
     # allowed — stock does arrive without an order behind it).
+    #
+    # A stock-holding VENDOR is both: the assembly factory hands over what
+    # it holds AND delivers what it made. No order names its vendor, so the
+    # parts it could be delivering — on order, none held by it — are
+    # offered too, and the person says which it is with a tick (below).
+    _maker = (holders_store.get(h_from).get("kind", "").lower() == "vendor"
+              if h_from else False)
+
+    def _could_arrive(code: str) -> bool:
+        return (_maker and code in open_orders
+                and holdings.get((code, h_from), 0) <= 0)
+
     if holds_stock(h_from):
-        _options = [c for c in codes if holdings.get((c, h_from), 0) > 0]
+        _options = ([c for c in codes if holdings.get((c, h_from), 0) > 0]
+                    + [c for c in codes if _could_arrive(c)])
     else:
         _options = ([c for c in codes if c in open_orders]
                     + [c for c in codes if c not in open_orders])
 
     def _hint(code: str) -> str:
+        if _could_arrive(code):
+            return "on order — %s holds none" % h_from
         if holds_stock(h_from):
             return "%s holds %d" % (h_from, holdings.get((code, h_from), 0))
         if h_from and code in open_orders:
@@ -157,7 +172,14 @@ if mode == "Move parts":
 
     lines = []
     for code in picked:
-        _cands = open_orders.get(code, []) if kind == "receipt" else []
+        # The one thing From and To cannot say: a vendor's own make arriving
+        # on its order. Offered only where it can be true, and never
+        # assumed — a holder with none is as often a count that is behind.
+        _offer = kind == "move" and _could_arrive(code)
+        arriving = bool(_offer and st.session_state.get(
+            "rec_arr_%d_%s_%s" % (_e, h_from, code)))
+        _cands = (open_orders.get(code, [])
+                  if kind == "receipt" or arriving else [])
         q1, q2, q3 = st.columns([3, 1.2, 2.2], vertical_alignment="center")
         with q1:
             st.markdown("**%s**  \n:gray[%s]" % (label(code), _hint(code)))
@@ -170,6 +192,12 @@ if mode == "Move parts":
                 placeholder="Qty", key="rec_qty_%d_%s_%s" % (_e, h_from, code))
         with q3:
             order_id = ""
+            if _offer:
+                st.checkbox("Arriving on the order",
+                            key="rec_arr_%d_%s_%s" % (_e, h_from, code),
+                            help="%s made these and is delivering them "
+                                 "against the part's order — not handing "
+                                 "over stock it held." % h_from)
             if len(_cands) > 1:
                 order_id = st.selectbox(
                     "Which order (%s)" % code,
@@ -180,7 +208,8 @@ if mode == "Move parts":
                          for o in _cands if o["id"] == i), "Which order?"),
                     label_visibility="collapsed",
                     key="rec_ord_%d_%s" % (_e, code))
-        lines.append({"part": code, "qty": qty or 0, "order_id": order_id})
+        lines.append({"part": code, "qty": qty or 0, "order_id": order_id,
+                      "arriving": arriving, "can_arrive": _offer})
     lines = record_writer.resolve_orders(lines, open_orders)
 
     d1, d2 = st.columns(2)
@@ -197,14 +226,22 @@ if mode == "Move parts":
 
     # --- the slip: what this entry will do, before it is saved ------------
     with st.container(border=True):
+        _counted = [fx for fx in effects if fx["qty"]]
+        _all_arriving = bool(_counted) and all(
+            fx.get("arriving") for fx in _counted)
+        # The header names what the ENTRY is; a box whose every line is a
+        # vendor's own make arriving is goods arriving, not a move.
+        _word = record_writer.WORDS.get(
+            "receipt" if kind == "move" and _all_arriving else kind, "")
         st.markdown("%s**%s → %s** · %s" % (
-            ("`%s` · " % record_writer.WORDS[kind])
-            if kind in record_writer.WORDS else "",
+            ("`%s` · " % _word) if _word else "",
             h_from or "From…", h_to or "To…", date.strftime("%d %b %Y")))
         for fx in effects:
             if not fx["qty"]:
                 continue
             bits = ["`%s` ×%d" % (fx["part"], fx["qty"])]
+            if fx.get("arriving"):
+                bits.append("arriving, made by %s" % h_from)
             if fx.get("order"):
                 o = fx["order"]
                 bits.append("order %s: %d of %d%s" % (
@@ -212,7 +249,7 @@ if mode == "Move parts":
                     " — complete" if o["after"] == o["ordered"]
                     else (" — %d still to come" % (o["ordered"] - o["after"])
                           if o["after"] < o["ordered"] else "")))
-            elif kind == "receipt":
+            elif kind == "receipt" or fx.get("arriving"):
                 bits.append("no open order — counted as stock arriving")
             if "from_before" in fx:
                 bits.append("%s %d → %d" % (h_from, fx["from_before"],
@@ -221,7 +258,11 @@ if mode == "Move parts":
                 bits.append("%s %d → %d" % (h_to, fx["to_before"],
                                            fx["to_after"]))
             st.markdown(" · ".join(bits))
-        if kind == "move":
+        if kind == "move" and _all_arriving:
+            st.caption("Arriving against the order — only %s's count "
+                       "changes; %s is delivering what it made, not stock "
+                       "it held." % (h_to, h_from))
+        elif kind == "move":
             st.caption(
                 "Both counts change now. Because it has a tracking number it "
                 "shows as **on its way** until someone ticks that it arrived."
